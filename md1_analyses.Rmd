@@ -1,0 +1,2072 @@
+---
+title: "ManyDogs 1 Analyses"
+author: "ManyDogs Project et al."
+date: "`r Sys.Date()`"
+mainfont: Times
+bibliography: r-references.bib
+output: 
+  bookdown::pdf_document2:
+    number_sections: false
+    toc: false
+---
+
+```{r setup-demo, include = FALSE}
+
+# Set up knitr options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+# Load packages
+library(car)
+library(psych)
+library(tidyverse)
+library(here)
+library(papaja)
+library(knitr)
+library(kableExtra)
+library(brms)
+library(BayesFactor)
+library(bayestestR)
+library(performance)
+library(ggdist)
+library(gghalves)
+library(ggpubr)
+library(patchwork)
+library(flextable)
+library(lme4)
+library(gtools)
+library(data.table)
+library(bayesplot)
+library(tidybayes)
+library(glue)
+library(coda)
+library(MCMCglmm)
+library(broom.mixed)
+
+extrafont::loadfonts()
+
+# Create citations for R and R packages
+r_refs(file = "r-references.bib")
+my_citations <- cite_r(file = "r-references.bib", pkgs = c("BayesFactor", "bayesplot", "bayestestR", "brms", "broom.mixed", "car", "coda", "data.table", "flextable", "ggdist", "gghalves", "ggpubr", "glue", "gtools", "here", "kableExtra", "knitr", "lme4", "MCMCglmm", "papaja", "patchwork", "performance", "psych", "rmarkdown", "rstan", "tidybayes", "tidyverse"), omit = FALSE)
+```
+
+```{r functions}
+
+# Define functions
+
+# Calculate demographics for each site
+calculate_site_demographics <- function(data, measure, overall = TRUE) {
+  # measure <- sym(measure)
+  measure_vec <- pull(data, {{ measure }})
+  measure_str <- sub("\\.data\\[\\[\"", "", enexpr(measure))[3]
+  if (is.character(measure_vec)) {
+    if(overall) {
+      data %>% 
+        count({{ measure }}) |>
+        pivot_wider(names_from = {{ measure }}, values_from = n) %>% 
+        rename_with(~ paste0(measure_str, "_", tolower(.x)))
+    } else {
+      data %>% 
+        count(site, {{ measure }}) |>
+        complete(site, {{ measure }}) |> 
+        mutate(n = replace_na(n, 0)) |> 
+        pivot_wider(id_cols = site, names_from = {{ measure }}, values_from = n) %>% 
+        rename_with(~ paste0(measure_str, "_", tolower(.x)))
+    }
+  } else if (is.numeric(measure_vec)) {
+    data %>% 
+      {if (!overall) group_by(., site) else . } %>% 
+      summarise(n = n(),
+                mean = mean({{ measure }}, na.rm = TRUE), 
+                sd = sd({{ measure }}, na.rm = TRUE),
+                min = min({{ measure }}, na.rm = TRUE),
+                max = max({{ measure }}, na.rm = TRUE)) %>% 
+      rename_with(.cols = mean:max, ~ paste0(measure_str, "_", .x))
+  } else {
+    stop("Wrong data type for measure.")
+  }
+}
+
+# Calculate inter-rater reliablity for each site
+calculate_site_reliability <- function(sitename) {
+  site_data <- included_data |> 
+    filter(site == sitename) |> 
+    select(choice, recoded_choice) |>
+    drop_na()
+  cohen.kappa(cbind(site_data$choice, site_data$recoded_choice))
+}
+
+# Calculate one-sample t-tests
+calculate_ttests <- function(sitename = NULL) {
+  if (!is.null(sitename)) {
+    df <- filter(agg_data, site == sitename)
+  } else {
+    df <- agg_data
+  }
+  df_ost <- filter(df, condition == "ostensive")
+  df_nonost <- filter(df, condition == "nonostensive")
+  df_odor <- filter(df, condition == "odor")
+  
+  # Frequentist
+  tt_ost <- t.test(df_ost$mean_correct, mu = 0.5, alternative = "two.sided")
+  tt_nonost <- t.test(df_nonost$mean_correct, mu = 0.5, alternative = "two.sided")
+  tt_odor <- t.test(df_odor$mean_correct, mu = 0.5, alternative = "two.sided")
+  
+  # Bayes factors
+  tt_ost_bf <- ttestBF(df_ost$mean_correct, mu = 0.5, alternative = "two.sided")
+  tt_nonost_bf <- ttestBF(df_nonost$mean_correct, mu = 0.5, alternative = "two.sided")
+  tt_odor_bf <- ttestBF(df_odor$mean_correct, mu = 0.5, alternative = "two.sided")
+  
+  return(list(tt_ost = tt_ost, tt_nonost = tt_nonost, tt_odor = tt_odor, 
+              tt_ost_bf = tt_ost_bf, tt_nonost_bf = tt_nonost_bf, tt_odor_bf = tt_odor_bf))
+}
+
+# Clean up effects columns for model tables
+clean_effects <- function(x) {
+  names(x)[1] <- "effect"
+  x |> 
+    filter(!effect %in% c("sexMale", "desexedYes")) |> 
+    mutate(effect = gsub("<none>", "(Intercept)", effect),
+           effect = gsub("Yes", "", effect),
+           effect = gsub("Male", "", effect),
+           effect = gsub("sexM", "Sex", effect),
+           effect = gsub("ostensive", "", effect),
+           effect = gsub("condition\\_orderost", "condition\\_order", effect),
+           effect = gsub("ost\\_first", "", effect),
+           effect = gsub("\\_z", "", effect),
+           effect = gsub("num", "number", effect),
+           effect = gsub("biasyes", "bias", effect),
+           effect = str_to_sentence(gsub("\\_", " ", effect))
+    )
+}
+
+# Calculate t-tests per site
+ost_nonost_ttests <- function(sitename = NULL) {
+  if (!is.null(sitename)) {
+    x <- filter(agg_data, site == sitename)
+  } else {
+    x <- agg_data
+  }
+  x <- x |> 
+    filter(grepl("ostensive", condition)) |> 
+    pivot_wider(id_cols = c(site, subjectID), names_from = condition, values_from = mean_correct) |> 
+    drop_na()
+  ost_ttest <- t.test(x$ostensive, x$nonostensive, paired = TRUE)
+  pvalue <- ost_ttest$p.value
+  ost_ttestbf <- ttestBF(x$ostensive, x$nonostensive, paired = TRUE)
+  bf <- extractBF(ost_ttestbf)$bf
+  return(paste0("   N = ", nrow(x), "\np = ", apa_num(pvalue, digits = 3), "\nBF = ", round(bf, 2)))
+}
+
+# Convert numerals less than 10 to words
+word_nums <- c("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+make_word_nums <- function (x) ifelse(x < 10, word_nums[x + 1], x)
+
+# Create model formulas by dropping predictors
+drop_predictor <- function(x) {
+  if (!grepl(x, fixed_effects)) {
+    stop("That predictors was not found in the fixed effects.")
+  }
+  paste0(sub(paste(x, "\\+"), "", fixed_effects), " ", random_effects)
+}
+
+# Import external functions
+source(here("md1_functions.R"))
+```
+
+
+# Methods
+
+## Data analysis
+We analyzed data from the project using `r my_citations`. Data, analysis scripts, and pre-registered methods (videos) are available at the Open Science Framework (https://osf.io/9r5xf/), as is pre-registration of our design and analysis plan (https://doi.org/10.17605/OSF.IO/GZ5PJ).
+
+
+# Results
+
+## Pilot data
+
+```{r import-data-pilot}
+# Import pilot data
+pilot_data <- read_csv(here("md1_data_pilot.csv"), show_col_types = FALSE)
+```
+
+
+### _Demographics_
+
+```{r demographics-pilot}
+# Calculate demographic information for pilot data
+demographics_pilot <- pilot_data |> 
+  group_by(subjectID) |> 
+  slice_head() |> 
+  ungroup()
+demographics_measures_pilot <- c("age", "sex", "desexed", "purebred")
+demographics_overall_pilot <- map_dfc(demographics_measures_pilot, 
+                                      ~ calculate_site_demographics(demographics_pilot, .data[[.x]]), 
+                                      overall = TRUE) |> 
+  mutate(site = "Overall", .before = 1)
+```
+
+```{r breed-info-pilot}
+# Find number of each breed in pilot data
+breeds_pilot <- pilot_data |> 
+  group_by(subjectID) |> 
+  slice_head(n = 1) |> 
+  ungroup() |> 
+  count(breed) |> 
+  drop_na() |> 
+  arrange(desc(n))
+n_breeds_pilot <- nrow(filter(breeds_pilot, n >= 8))
+```
+
+In the pilot experiment, we tested `r demographics_overall_pilot$n` dogs (M:F = `r demographics_overall_pilot$sex_m`:`r demographics_overall_pilot$sex_f`, mean±SD age = `r round(demographics_overall_pilot$age_mean, 1)`±`r round(demographics_overall_pilot$age_sd, 1)` years [range = `r demographics_overall_pilot$age_min`-`r demographics_overall_pilot$age_max`]). Approximately `r round(demographics_overall_pilot$desexed_yes / (demographics_overall_pilot$desexed_yes + demographics_overall_pilot$desexed_no) * 100, 1)`% of the dogs were spayed or neutered, `r round(demographics_overall_pilot$purebred_yes / (demographics_overall_pilot$purebred_yes + demographics_overall_pilot$purebred_no) * 100, 1)`% were purebred, and all lived in private homes. 
+
+```{r aggregate-data-pilot}
+# Aggregate pilot data for conditions
+agg_data_pilot <- pilot_data |>
+  group_by(subjectID, sex, breed, age, training, condition) |>
+  summarise(mean_correct = mean(correct, na.rm = TRUE), .groups = "drop")
+n_subjects_pilot <- agg_data_pilot |> 
+  slice_head(by = subjectID) |> 
+  nrow()
+agg_data_noodor_pilot <- agg_data_pilot |> 
+  filter(condition != "odor") |> 
+  mutate(cond_jitter = jitter(as.numeric(as.factor(condition)), amount = 0.1),
+         cond_num = case_when(condition == "nonostensive" ~ 1,
+                              condition == "ostensive" ~ 2,
+                              .default = NA))
+agg_data_ostensive_pilot <- agg_data_noodor_pilot |>
+  filter(condition == "ostensive")
+agg_data_nonostensive_pilot <- agg_data_noodor_pilot |>
+  filter(condition == "nonostensive")
+agg_data_odor_pilot <- agg_data_pilot |>
+  mutate(condition=as.factor(condition))|>
+  filter(condition == "odor")
+
+```
+
+
+### _Performance Relative to Chance_
+
+```{r t-tests-pilot}
+# Calculate one-sample t-tests for each condition for pilot data
+tt_ost_pilot <- t.test(agg_data_pilot$mean_correct[agg_data_pilot$condition == "ostensive"], mu = 0.5, alternative = "two.sided")
+tt_non_pilot <- t.test(agg_data_pilot$mean_correct[agg_data_pilot$condition == "nonostensive"], mu = 0.5, alternative = "two.sided")
+tt_odor_pilot <- t.test(agg_data_pilot$mean_correct[agg_data_pilot$condition == "odor"], mu = 0.5, alternative = "two.sided")
+
+# Calulate Bayes factors for t-tests
+tt_ost_bf_pilot <- ttestBF(agg_data_pilot$mean_correct[agg_data_pilot$condition == "ostensive"], mu = 0.5, alternative = "two.sided")
+tt_non_bf_pilot <- ttestBF(agg_data_pilot$mean_correct[agg_data_pilot$condition == "nonostensive"], mu = 0.5, alternative = "two.sided")
+tt_odor_bf_pilot <- ttestBF(agg_data_pilot$mean_correct[agg_data_pilot$condition == "odor"], mu = 0.5, alternative = "two.sided")
+```
+
+The dogs (N = `r n_subjects_pilot`) performed better than expected by chance in the Ostensive condition (`r apa_ttest(tt_ost_pilot, digits = 2)`, `r format_bf(tt_ost_bf_pilot)`) but not in the Non-ostensive condition (`r apa_ttest(tt_non_pilot, digits = 2)`, `r format_bf(tt_non_bf_pilot)`) or the Odor Control condition (`r apa_ttest(tt_odor_pilot, digits = 2)`, `r format_bf(tt_odor_bf_pilot)`) (Figure S6).
+
+
+### _Condition Comparison_
+
+```{r model-building-pilot}
+# Build models for pilot data
+
+# Center and scale variables for modeling
+model_data_pilot <- pilot_data |>
+  filter(condition == "ostensive" | condition == "nonostensive") |>
+  mutate(
+    age_z = as.numeric(scale(age, scale = TRUE, center = TRUE)),
+    trial_num_z = as.numeric(scale(trial, scale = TRUE, center = TRUE)),
+    training_score_z = as.numeric(scale(training, scale = TRUE, 
+                                        center = TRUE)),
+    condition_c = as.numeric(scale(as.numeric(as.factor(condition)), 
+                                   scale = FALSE, center = TRUE)),
+    condition_order_c = as.numeric(scale(as.numeric(as.factor(condition_order)), 
+                                         scale = FALSE, center = TRUE)),
+    sex_c = as.numeric(scale(as.numeric(as.factor(sex)), scale = FALSE, 
+                             center = TRUE))
+  )
+
+# Define full models (with and without correlations in random effects)
+fixed_effects_pilot <- "correct ~ condition + condition_order + trial_num_z + sex + age_z + training_score_z +" 
+random_effects_corr_pilot <- "(condition_c + trial_num_z | subjectID)"
+random_effects_nocorr_pilot <- "(condition_c + trial_num_z || subjectID)"
+full_model_formula_corr_pilot <- paste(fixed_effects_pilot, random_effects_corr_pilot)
+full_model_formula_nocorr_pilot <- paste(fixed_effects_pilot, random_effects_nocorr_pilot)
+```
+
+```{r run-model-pilot, eval = FALSE}
+# Run the full models with and without correlations for pilot data
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Set model control parameters and random seed
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000000), calc.derivs = FALSE)
+set.seed(100)
+
+# Run full models (with and without correlations)
+full_model_corr_pilot <- glmer(full_model_formula_corr_pilot, family = binomial, 
+                               data = model_data_pilot, control = contr, nAGQ = 0)
+full_model_nocorr_pilot <- glmer(full_model_formula_nocorr_pilot, family = binomial, 
+                                 data = model_data_pilot, control = contr, nAGQ = 0)
+
+# Compare models
+summary(full_model_corr_pilot)$log
+summary(full_model_nocorr_pilot)$log
+# Model with no correlations has better fit (lower log-likelihood), so use that model
+
+# Set effects and build model formula
+random_effects_pilot <- random_effects_corr_pilot
+full_model_formula_pilot <- full_model_formula_corr_pilot
+full_model_pilot <- full_model_corr_pilot
+full_model_table_pilot <- as.data.frame(summary(full_model_pilot)$coefficients) |>
+  rownames_to_column(var = "effect_full")
+write_csv(full_model_table_pilot, here("results/md1_full_model_pilot.csv"))
+
+## Calculate likelihood ratio test
+drop1_full_model_pilot <- drop1(full_model_pilot, test = "Chisq", control = contr)
+drop1_full_model_rownames_pilot <- rownames(drop1_full_model_pilot)
+drop1_full_model_table_pilot <- tibble(effect_drop = drop1_full_model_rownames_pilot, drop1_full_model_pilot)
+write_csv(drop1_full_model_table_pilot, here("results/md1_drop_model_pilot.csv"))
+```
+
+```{r bootstrap-cis-pilot, eval = FALSE}
+# Calculate bootstrapped 95% confidence intervals for model estimates for pilot data
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+set.seed(300)
+full_model2_pilot <- glmer(full_model_formula_pilot, family = binomial, data = model_data_pilot,
+                           control = glmerControl(optimizer = "bobyqa", 
+                                                  optCtrl = list(maxfun = 10000000), 
+                                                  calc.derivs = FALSE), nAGQ = 0)
+full_model_ci_pilot <- boot.glmm.pred(model.res = full_model2_pilot, excl.warnings = TRUE, 
+                                      nboots = 1000, para = TRUE, n.cores = 20, 
+                                      level = 0.95)
+full_model_ci_estimates_pilot <- full_model_ci_pilot$ci.estimates
+full_model_ci_estimatesl_rownames_pilot <- rownames(full_model_ci_estimates_pilot)
+full_model_ci_estimates_table_pilot <- tibble(effect_ci = full_model_ci_estimatesl_rownames_pilot, full_model_ci_estimates_pilot)
+write_csv(full_model_ci_estimates_table_pilot, here("results/md1_ci_model_pilot.csv"))
+```
+
+```{r bayes-factors-pilot, eval = FALSE}
+# Run the full Bayesian models with and without correlations for pilot data
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Prepare computing environment for Bayesian analysis
+n_cores <- 4
+n_chains <- 4L
+n_threads <- 3
+n_cpu <- n_cores * n_threads
+total_draws <- 40000
+n_warmup <- 5000
+n_iter <- round((total_draws / n_chains) + n_warmup)
+
+# Run all models and calculate Bayes factors comparing to full model
+set.seed(101)
+bayes_full_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z || subjectID), family = bernoulli, data = model_data_pilot, 
+                        save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                        iter = n_iter, warmup = n_warmup,
+                        chains = n_chains, cores = n_cores, 
+                        threads = threading(n_threads))
+
+bayes_nocondition_pilot <- brm(correct ~ condition_order + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                               save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                               iter = n_iter, warmup = n_warmup,
+                               chains = n_chains, cores = n_cores, 
+                               threads = threading(n_threads))
+
+(condition_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_nocondition_pilot, repetitions = 10, silent = TRUE))
+
+bayes_noconditionorder_pilot <- brm(correct ~ condition + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                                    save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                                    iter = n_iter, warmup = n_warmup,
+                                    chains = n_chains, cores = n_cores, 
+                                    threads = threading(n_threads))
+
+(order_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_noconditionorder_pilot, repetitions = 10, silent = TRUE))
+
+bayes_notrialnum_pilot <- brm(correct ~ condition + condition_order + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                              save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                              iter = n_iter, warmup = n_warmup,
+                              chains = n_chains, cores = n_cores, 
+                              threads = threading(n_threads))
+
+(trialnum_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_notrialnum_pilot, repetitions = 10, silent = TRUE))
+
+bayes_nosex_pilot <- brm(correct ~ condition + condition_order + trial_num_z + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                         save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                         iter = n_iter, warmup = n_warmup,
+                         chains = n_chains, cores = n_cores, 
+                         threads = threading(n_threads))
+
+(sex_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_nosex_pilot, repetitions = 10, silent = TRUE))
+
+bayes_noage_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                         save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                         iter = n_iter, warmup = n_warmup,
+                         chains = n_chains, cores = n_cores, 
+                         threads = threading(n_threads))
+
+(age_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_noage_pilot, repetitions = 10, silent = TRUE))
+
+bayes_notraining_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + age_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
+                              save_pars = save_pars(all = TRUE), backend = "cmdstanr",
+                              iter = n_iter, warmup = n_warmup,
+                              chains = n_chains, cores = n_cores, 
+                              threads = threading(n_threads))
+
+(training_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_notraining_pilot, repetitions = 10, silent = TRUE))
+
+# Create table of Bayes factors
+model_bfs_pilot <- tibble(effect = c("(Intercept)", "Condition", "Condition order", "Trial number", "Sex", "Age", "Training score"), bf = c(NA, condition_bf_pilot$bf_median_based, order_bf_pilot$bf_median_based, trialnum_bf_pilot$bf_median_based, sex_bf_pilot$bf_median_based, age_bf_pilot$bf_median_based, training_bf_pilot$bf_median_based))
+write_csv(model_bfs_pilot, here("results/md1_model_bfs_pilot.csv"))
+```
+
+```{r build-model-table-pilot}
+# Build model table for pilot data
+
+# Read in model tables to save time
+full_model_table_pilot <- read_csv(here("results/md1_full_model_pilot.csv"), show_col_types = FALSE)
+drop1_full_model_pilot <- read_csv(here("results/md1_drop_model_pilot.csv"), show_col_types = FALSE)
+model_bfs_pilot <- read_csv(here("results/md1_model_bfs_pilot.csv"), show_col_types = FALSE)
+model_cis_pilot <- read_csv(here("results/md1_ci_model_pilot.csv"), show_col_types = FALSE)
+
+# Clean and standardize effects for combining tables
+full_model_trimmed_pilot <- clean_effects(full_model_table_pilot)
+model_cis_trimmed_pilot <- clean_effects(model_cis_pilot)
+drop1_full_model_trimmed_pilot <- drop1_full_model_pilot |>
+  clean_effects()
+
+# Create table
+model_table_pilot <- full_model_trimmed_pilot |> 
+  left_join(model_cis_trimmed_pilot, by = "effect") |> 
+  left_join(drop1_full_model_trimmed_pilot, by = "effect") |>
+  left_join(model_bfs_pilot, by = "effect") |> 
+  select(effect, Estimate, SE = `Std. Error`, `Lower CI` = X2.5., `Upper CI` = X97.5., 
+         `Chi-square` = LRT, df = npar, p = `Pr(Chi)`, `BF` = bf) |>
+  mutate(across(c(-df, -effect), ~ format_num(.x, digits = 2)),
+         across(`Chi-square`:BF, ~ str_replace(.x, "  NA", "")),
+         across(df, ~ str_replace_na(.x, ""))) |> 
+  remove_rownames()
+```
+
+```{r condition-plot-pilot, include = FALSE}
+# Create condition plots for pilot data
+
+# Calculate within-subject confidence intervals for plot
+ci_data_pilot <- summary(wsci(data = agg_data_pilot, id = "subjectID", factors = c("condition"), dv = "mean_correct")) |> 
+  mutate(cond_num = case_when(condition == "nonostensive" ~ 1,
+                              condition == "ostensive" ~ 2,
+                              condition == "odor" ~ 3,
+                              .default = NA))
+
+# Ostensive/non-ostensive plot
+condition_plot_pilot <- agg_data_noodor_pilot |> 
+  ggplot(aes(x = condition, y = mean_correct)) +
+  geom_line(aes(x = cond_jitter, group = subjectID),
+            color = "gray", alpha = 0.25) +
+  geom_point(data = agg_data_nonostensive_pilot,
+             aes(x = cond_jitter),
+             color = "#0072B2", size = 1.5, alpha = 0.25) +
+  geom_point(data = agg_data_ostensive_pilot,
+             aes(x = cond_jitter),
+             color = "#D55E00", size = 1.5, alpha = 0.25, ) +
+  geom_half_violin(data = agg_data_nonostensive_pilot, 
+                   aes(x = cond_num, y = mean_correct),
+                   position = position_nudge(x = -0.25), side = "l", fill = "#0072B2", alpha = 0.5) +
+  geom_half_violin(data = agg_data_ostensive_pilot, 
+                   aes(x = cond_num, y = mean_correct),
+                   position = position_nudge(x = 0.25), side = "r", fill = "#D55E00", alpha = 0.5) +
+  geom_hline(yintercept = 0.5, lty = 2, col = "firebrick") +
+  geom_pointrange(data = ci_data_pilot |> filter(condition != "odor"), 
+                  aes(x = cond_num, y = mean, ymin = lower_limit, ymax = upper_limit), 
+                  color = "black", size = 0.15, linewidth = 0.6) +
+  geom_line(data = ci_data_pilot |> filter(condition != "odor"), 
+            aes(x = cond_num, y = mean), color = "black") +
+  xlab("Condition") +
+  ylab("Proportion correct") +
+  scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+
+# Odor control
+odor_plot_pilot <- ggplot(data = agg_data_odor_pilot, aes(x = as.numeric(condition), y = mean_correct)) +
+  geom_jitter(data = agg_data_odor_pilot, aes(x = as.numeric(condition)), 
+              color = "grey", size = 1.5, alpha = 0.5, height = 0, width = 0.2) +
+  geom_half_violin(data = agg_data_odor_pilot, aes(x = as.numeric(condition), y = mean_correct), 
+                   position = position_nudge(x = -0.3), side = "l", width = 0.2, fill = "grey", alpha = .5) +
+  geom_hline(yintercept = 0.5, lty = 2, col = "firebrick") +
+  geom_pointrange(data = ci_data_pilot |> filter(condition == "odor"), 
+                  aes(y = mean, ymin = lower_limit, ymax = upper_limit), 
+                  color = "grey50", size = 0.15, linewidth = 0.6) +
+  xlab("") +
+  ylab("Proportion correct") +
+  scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+
+# Combine plots
+condition_plot_pilot + odor_plot_pilot + 
+  plot_layout(widths = c(2, 1)) +
+  plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
+ggsave(here("figures/md1_conditions_pilot.png"), width = 10, height = 8, scale = 0.5)
+```
+
+
+The dogs choose the baited cup more in the Ostensive condition compared to the Non-ostensive condition (_X_^2^(`r model_table_pilot[model_table_pilot$effect == "Condition", "df"]`) = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "p"])`, _BF_~10~ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "BF"], digits = 1)`) (Figure S6A). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table S2). 
+
+
+```{r check-assumptions-pilot, eval = FALSE}
+# Check assumptions and model stability for pilot data
+
+# Plot visualizations of model checks
+check_model(full_model_pilot)
+
+# Check for collinearity
+check_collinear <- lm(correct ~ condition + condition_order + trial_num_z + 
+                        sex + desexed + age_z + training_score_z,
+                      data = model_data_pilot)
+vif(check_collinear)
+# Collinearity was no issue (maximum variance inflation factor: 1.11)
+
+## Model stability
+## One subject at a time excluded to assess the impact of outliers.
+model_stability_md1_subj <- glmm.model.stab(model.res = full_model_pilot, use = c("subjectID"), para = TRUE)
+model_stability_md1_subj$detailed$warnings
+model_stability_md1_subj_warnings <- as.data.frame(round(model_stability_md1_subj$summary[, -1], 3))[1:9,]
+
+png("figures/md1_full_model_stability_plot_subj.png")
+m.stab.plot(round(model_stability_md1_subj$summary[, -1], 3)[1:9,])
+dev.off()
+
+## One site at a time excluded to assess the impact of outliers.
+model_stability_md1_site <- glmm.model.stab(model.res = full_model_pilot, use = c("site"), para = TRUE)
+model_stability_md1_site$detailed$warnings
+
+png("figures/md1_full_model_stability_plot_site.png")
+m.stab.plot(round(model_stability_md1_site$summary[, -1], 3)[1:9,])
+dev.off()
+# The model appeared to be stable with respect to the fixed effects (see full_model_stability_plot_site and full_model_stability_plot_subject).
+```
+
+
+## Main experiment
+\setcounter{figure}{3}
+
+### _Demographics_
+
+```{r}
+# Build table of site information
+site_name <- c("Animal Health and Welfare Research Centre", 
+               "Arizona Canine Cognition Center", 
+               "Auburn Canine Performance Sciences", 
+               "Boston Canine Cognition Center", 
+               "Brown Dog Lab", 
+               "Canid Behavior Research Group", 
+               "Canine Cognition and Human Interaction Lab", 
+               "Canine Cognition Center at Yale", 
+               "Canine Companions", 
+               "Canine Research Unit", 
+               "Clever Dog Lab$^{\\dagger}$", 
+               "Comparative Cognition Lab", 
+               "Comparative Cognitive Science Lab", 
+               "Consultorio Comportamentale", 
+               "Department of Psychology and Individual Differences", 
+               "Dog Cognition Centre", 
+               "Duke Canine Cognition Center", 
+               "Leader Dogs for the Blind$^{\\ddagger}$", 
+               "Social Cognition Lab", 
+               "The Family Dog Project", 
+               "Thinking Dog Center")
+site <- c("ucs", "accc", "auburn", "bccc", "bdl", "icoc", "cchil", "yale", "cci", "crumun", "cdl", "manitoba", "urijeka", "umessina", "uwarsaw", "dcc", "duke", "ldbtdc", "queensu", "eltebuda", "tdc")
+site_abbr <- c("AHWRC", "ACCC", "ACPS", "BCCC", "BDL", "CBRG", "CCHIL", "CCC", "CCI", "CRU", "CDL", "CCL", "CCSL", "CC", "DPID", "DCC", "DCCC", "LDB", "SCL", "TFDP", "TDC")
+lead <- c("Marianne Freeman", "Evan MacLean", "Lucia Lazarowski", "Angie Johnston", "Daphna Buchsbaum", "Mariana Bentosela", "Jeffrey Stevens", "Laurie Santos", "Brenda Kennedy", "Carolyn Walsh", "Ludwig Huber", "Debbie Kelly", "Ljerka Ostoji\'{c}", "Daniela Alberghina", "Anna Reinholz", "Juliane Kaminski", "Brian Hare", "Sarah-Elizabeth Byosiere", "Valerie Kuhlmeier", "Ádám Miklósi", "Sarah-Elizabeth Byosiere")
+lead <- c("Marianne Freeman", "Evan MacLean", "Lucia Lazarowski", "Angie Johnston", "Daphna Buchsbaum", "Camila Cavalli", "Jeffrey Stevens", "Laurie Santos", "Emily Bray", "Carolyn Walsh", "Ludwig Huber", "Debbie Kelly", "Ljerka Ostojić", "Daniela Alberghina", "Anna Reinholz", "Juliane Kaminski", "Brian Hare", "Sarah-Elizabeth Byosiere", "Valerie Kuhlmeier", "Andrea Sommese", "Sarah-Elizabeth Byosiere")
+location <- c("Winchester, United Kingdom", "Tuscon, AZ, USA", "Auburn, AL, USA", "Boston, MA, USA", "Providence, RI, USA", "Buenos Aires, Argentina", "Lincoln, NE, USA", "New Haven, CT, USA", "Santa Rosa, CA, USA", "St. John’s, NL, Canada", "Vienna, Austria", "Winnipeg, MB, Canada", "Rijeka, Croatia", "Messina, Italy", "Warsaw, Poland", "Portsmouth, United Kingdom", "Durham, NC, USA", "Rochester, MI, USA", "Dundalk, ON, Canada", "Budapest, Hungary", "New York City, NY, USA")
+team <- c(2, 3, 3, 3, 4, 3, 5, 3, 3, 3, 3, 3, 2, 2, 4, 5, 3, 2, 2, 3, 3)
+testing <- c("Lab", "Lab", "Lab, Facility", "Lab", "Lab", "Home", "Lab", "Lab", "Facility", "Lab", "Lab", "Lab", "Lab", "Lab", "Lab", "Lab", "Lab", "Facility", "Lab, Facility", "Lab", "Lab")
+site_info <- data.frame(site_name, site, site_abbr, lead, location, team, testing) |> 
+  filter(site != "cdl")
+site_key <- select(site_info, site, site_abbr)
+
+cdl_info <- data.frame(site_name = "Clever Dog Lab$^{\\dagger}$", site = "cdl", 
+                       site_abbr = "CDL", lead = "Ludwig Huber", 
+                       location = "Vienna, Austria", team = 3, testing = "Lab", 
+                       n = 61, age_mean = 5.13, age_sd = 3.31, age_min = 1, 
+                       age_max = 12, sex_female = 61-26, sex_male = 26, 
+                       desexed_no = 36, desexed_yes = 25, purebred_no = 1, 
+                       purebred_yes = 60, owned_status_group = 0, 
+                       owned_status_other = 0, owned_status_private = 61)
+```
+
+```{r import-data}
+# Import data and separate included data
+all_data <- read_csv(here("md1_data.csv"), show_col_types = FALSE) |> 
+  left_join(site_key, by = "site") |> 
+  select(site_abbr, everything(), -site) |>
+  rename(site = site_abbr) |> 
+  mutate(owned_status = fct_recode(owned_status, private = "Private home",
+                                   group = "Group housing (e.g., working dog kennel)",
+                                   other = "Other"),
+         owned_status = as.character(owned_status))
+
+included_data <- all_data |> 
+  filter(status == "Included" & !grepl("cup", condition) & valid_trial <= 8) |> 
+  mutate(condition = ifelse(is.na(condition), condition, condition))
+```
+
+```{r demographics}
+# Calculate demographic information
+
+# All data
+demographics_all <- all_data |> 
+  group_by(subjectID) |> 
+  slice_head() |> 
+  ungroup()
+demographics_measures <- c("age", "sex", "desexed", "purebred", "owned_status", "status")
+demographics_all_overall <- map_dfc(demographics_measures, 
+                                    ~ calculate_site_demographics(demographics_all, .data[[.x]]), 
+                                    overall = TRUE) |> 
+  mutate(site = "Overall", .before = 1)
+demographics_all_site <- map_dfc(demographics_measures, 
+                                 ~ calculate_site_demographics(demographics_all, .data[[.x]], 
+                                                               overall = FALSE)) |> 
+  select(-contains("_site"))
+demographics_all_summary <- bind_rows(demographics_all_overall, demographics_all_site)
+
+# Included data demographics
+demographics_included <- included_data |> 
+  group_by(subjectID) |> 
+  slice_head() |> 
+  ungroup()
+demographics_included_overall <- map_dfc(demographics_measures[-length(demographics_measures)], 
+                                         ~ calculate_site_demographics(demographics_included, .data[[.x]]), 
+                                         overall = TRUE) |> 
+  mutate(site = "Overall", .before = 1)
+demographics_included_site <- map_dfc(demographics_measures[-length(demographics_measures)],
+                                      ~ calculate_site_demographics(demographics_included, .data[[.x]], 
+                                                                    overall = FALSE)) |> 
+  select(-contains("_site"))
+demographics_included_summary <- bind_rows(demographics_included_site, 
+                                           demographics_included_overall) |> 
+  mutate(across(age_mean:age_sd, ~round(.x, 1)))
+```
+
+
+Across `r nrow(demographics_all_site)` sites, we tested `r demographics_all_overall$n` dogs and received demographic information for `r demographics_all_overall$n - 3` of them (M:F = `r demographics_all_overall$sex_male`:`r demographics_all_overall$sex_female`, mean±SD age = `r round(demographics_all_overall$age_mean, 1)`±`r round(demographics_all_overall$age_sd, 1)` years [range = `r demographics_all_overall$age_min`-`r demographics_all_overall$age_max`]). Approximately `r round(demographics_all_overall$desexed_yes / (demographics_all_overall$desexed_yes + demographics_all_overall$desexed_no) * 100, 1)`% of the dogs were spayed or neutered, `r round(demographics_all_overall$purebred_yes / (demographics_all_overall$purebred_yes + demographics_all_overall$purebred_no) * 100, 1)`% were purebred, and `r round(demographics_all_overall$owned_status_private  / (demographics_all_overall$owned_status_private + demographics_all_overall$owned_status_group + demographics_all_overall$owned_status_other) * 100, 1)`% lived in private homes, `r round(demographics_all_overall$owned_status_group  / (demographics_all_overall$owned_status_private + demographics_all_overall$owned_status_group + demographics_all_overall$owned_status_other) * 100, 1)`% lived in group/kennel housing, and `r round(demographics_all_overall$owned_status_other  / (demographics_all_overall$owned_status_private + demographics_all_overall$owned_status_group + demographics_all_overall$owned_status_other) * 100, 1)`% lived in other housing (Table S1). However, `r (demographics_all_overall$status_incomplete + demographics_all_overall$status_error)` dogs were excluded from the analysis because they failed to meet the inclusion criteria (`r demographics_all_overall$status_incomplete` failed to complete all trials and `r demographics_all_overall$status_error` experienced experimental errors during their sessions). This left `r demographics_all_overall$status_included` dogs for our analysis (M:F = `r demographics_included_overall$sex_male`:`r demographics_included_overall$sex_female`, mean±SD age = `r round(demographics_included_overall$age_mean, 1)`±`r round(demographics_included_overall$age_sd, 1)` years [range = `r demographics_included_overall$age_min`-`r demographics_included_overall$age_max`]). 
+
+
+```{r breed-info}
+# Find number of each breed
+breeds <- included_data |> 
+  filter(status == "Included") |> 
+  group_by(subjectID) |> 
+  slice_head(n = 1) |> 
+  ungroup() |> 
+  count(breed) |> 
+  drop_na() |> 
+  arrange(desc(n))
+n_breeds <- nrow(filter(breeds, n >= 8))
+```
+
+
+### _Inter-Rater Reliability_
+
+```{r reliability}
+# Calculate inter-rater reliability
+sites <- unique(included_data$site)
+overall_reliability_kappa <- cohen.kappa(cbind(included_data$choice, included_data$recoded_choice))
+site_reliablity <- map(sites, calculate_site_reliability)
+names(site_reliablity) <- sites
+site_kappas <- unlist(lapply(site_reliablity, "[[", 2))
+```
+
+The raters who recoded a subset of the trials had very high reliability with the original coding for choice ($\kappa$ = `r apa_num(overall_reliability_kappa$kappa)`, 95% CI [`r apa_num(overall_reliability_kappa$confid[1])`, `r apa_num(overall_reliability_kappa$confid[5])`], N = `r overall_reliability_kappa$n.obs`). Individual site reliability ranged from $\kappa$ = `r format_num(min(site_kappas), digits = 2)`-`r format_num(max(site_kappas), digits = 2)`.
+
+```{r aggregate-data}
+agg_data <- included_data |>
+  group_by(site, subjectID, sex, breed, breed_group, age, training, condition) |>
+  summarise(mean_correct = mean(correct, na.rm = TRUE), .groups = "drop")
+n_subjects <- agg_data |> 
+  slice_head(by = subjectID) |> 
+  nrow()
+agg_data_noodor <- agg_data |> 
+  filter(condition != "odor") |> 
+  mutate(cond_jitter = jitter(as.numeric(as.factor(condition)), amount = 0.1),
+         cond_num = case_when(condition == "nonostensive" ~ 1,
+                              condition == "ostensive" ~ 2,
+                              .default = NA))
+agg_data_ostensive <- agg_data_noodor |>
+  filter(condition == "ostensive")
+agg_data_nonostensive <- agg_data_noodor |>
+  filter(condition == "nonostensive")
+agg_data_odor <- agg_data |>
+  mutate(condition=as.factor(condition))|>
+  filter(condition == "odor")
+```
+
+
+### _Confirmatory Analyses_
+
+#### _Performance Relative to Chance_
+
+```{r t-tests}
+# Calculate one-sample t-tests for each condition overall and for each site
+overall_ttests <- calculate_ttests()
+for(i in seq_along(overall_ttests)) assign(names(overall_ttests)[i], overall_ttests[[i]])
+sites <- unique(agg_data$site)
+site_ttests <- map(sites, calculate_ttests)
+names(site_ttests) <- sites
+
+site_nas <- rep(NA, length(sites))
+site_ttests_df <- data.frame(site = sites, tt_ost_p = site_nas, 
+                             tt_nonost_p = site_nas, tt_odor_p = site_nas, 
+                             tt_ost = site_nas, tt_nonost = site_nas, 
+                             tt_odor = site_nas)
+for(i in seq_along(site_ttests)) {
+  site_ttests_df$tt_ost_p[i] <- site_ttests[[i]]$tt_ost$p.value
+  site_ttests_df$tt_nonost_p[i] <- site_ttests[[i]]$tt_nonost$p.value
+  site_ttests_df$tt_odor_p[i] <- site_ttests[[i]]$tt_odor$p.value
+  site_ttests_df$tt_ost[i] = paste0(apa_print(site_ttests[[i]]$tt_ost)$full_result, ", ",
+                                    apa_print(site_ttests[[i]]$tt_ost_bf)$statistic)
+  site_ttests_df$tt_nonost[i] = paste0(apa_print(site_ttests[[i]]$tt_nonost)$full_result, ", ",
+                                       apa_print(site_ttests[[i]]$tt_nonost_bf)$statistic)
+  site_ttests_df$tt_odor[i] = paste0(apa_print(site_ttests[[i]]$tt_odor)$full_result, ", ",
+                                     apa_print(site_ttests[[i]]$tt_odor_bf)$statistic)
+}
+
+# Find number of sites with p < 0.05
+n_ost_sites <- sum(site_ttests_df$tt_ost_p < 0.05)
+n_nonost_sites <- sum(site_ttests_df$tt_nonost_p < 0.05)
+n_odor_sites <- sum(site_ttests_df$tt_odor_p < 0.05)
+```
+
+The dogs (N = `r n_subjects`) performed better than expected by chance in the Ostensive condition (`r apa_ttest(tt_ost, digits = 2)`, `r format_bf(tt_ost_bf)`) and in the Non-ostensive condition (`r apa_ttest(tt_nonost, digits = 2)`, `r format_bf(tt_nonost_bf)`) but not in the Odor Control condition (`r apa_ttest(tt_odor, digits = 2)`, `r format_bf(tt_odor_bf)`) (Figure \@ref(fig:cond-chance)). Mean performance in all conditions at individual sites typically did not differ from chance with a few exceptions:  `r make_word_nums(n_ost_sites)` sites had Ostensive performance greater than chance, `r make_word_nums(n_nonost_sites)` sites had Non-ostensive performance greater than chance (Table S3).
+
+#### _Condition Comparison_
+
+```{r model-building}
+# Build models
+
+# Center and scale variables for modeling
+model_data <- included_data |>
+  filter(condition == "ostensive" | condition == "nonostensive") |>
+  mutate(
+    age_z = as.numeric(scale(age, scale = TRUE, center = TRUE)),
+    trial_num_z = as.numeric(scale(valid_trial, scale = TRUE, center = TRUE)),
+    trainability_score_z = as.numeric(scale(training, scale = TRUE, 
+                                            center = TRUE)),
+    condition_c = as.numeric(scale(as.numeric(as.factor(condition)), 
+                                   scale = FALSE, center = TRUE)),
+    condition_order_c = as.numeric(scale(as.numeric(as.factor(condition_order)), 
+                                         scale = FALSE, center = TRUE)),
+    sex_c = as.numeric(scale(as.numeric(as.factor(sex)), scale = FALSE, 
+                             center = TRUE)),
+    desexed_c = as.numeric(scale(as.numeric(as.factor(desexed)), scale = FALSE, 
+                                 center = TRUE))
+  )
+
+# Define full models (with and without correlations in random effects)
+fixed_effects <- "correct ~ condition + condition_order + trial_num_z + sex*desexed + age_z + trainability_score_z +" 
+random_effects_corr <- "(condition_c + trial_num_z | subjectID) + (condition_c + condition_order_c + trial_num_z + sex_c*desexed_c + age_z + trainability_score_z | site)"
+random_effects_nocorr <- "(condition_c + trial_num_z || subjectID) + (condition_c + condition_order_c + trial_num_z + sex_c*desexed_c + age_z + trainability_score_z || site)"
+full_model_formula_corr <- paste(fixed_effects, random_effects_corr)
+full_model_formula_nocorr <- paste(fixed_effects, random_effects_nocorr)
+```
+
+```{r run-model, eval = FALSE}
+# Run the full models with and without correlations
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Set model control parameters and random seed
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000000), calc.derivs = FALSE)
+set.seed(100)
+
+# Run full models (with and without correlations)
+full_model_corr <- glmer(full_model_formula_corr, family = binomial, 
+                         data = model_data, control = contr, nAGQ = 0)
+full_model_nocorr <- glmer(full_model_formula_nocorr, family = binomial, 
+                           data = model_data, control = contr, nAGQ = 0)
+
+# Compare models
+summary(full_model_corr)$log
+summary(full_model_nocorr)$log
+# Model with no correlations has better fit (lower log-likelihood), so use that model
+
+# Set effects and build model formula
+random_effects <- random_effects_nocorr
+full_model_formula <- full_model_formula_nocorr
+full_model <- full_model_nocorr
+full_model_table <- as.data.frame(summary(full_model)$coefficients) |>
+  rownames_to_column(var = "effect_full")
+write_csv(full_model_table, here("results/md1_full_model.csv"))
+
+## Calculate likelihood ratio test
+drop1_full_model <- drop1(full_model, test = "Chisq", control = contr)
+drop1_full_model_rownames <- rownames(drop1_full_model)
+drop1_full_model_table <- tibble(effect_drop = drop1_full_model_rownames, drop1_full_model)
+write_csv(drop1_full_model_table, here("results/md1_drop_model.csv"))
+```
+
+```{r bootstrap-cis, eval = FALSE}
+# Calculate bootstrapped 95% confidence intervals for model estimates
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+set.seed(300)
+full_model2 <- glmer(full_model_formula, family = binomial, data = model_data,
+                     control = glmerControl(optimizer = "bobyqa", 
+                                            optCtrl = list(maxfun = 10000000), 
+                                            calc.derivs = FALSE), nAGQ = 0)
+
+full_model_ci <- boot.glmm.pred(model.res = full_model2, excl.warnings = TRUE, 
+                                nboots = 1000, para = TRUE, n.cores = 20, 
+                                level = 0.95)
+full_model_ci_estimates<-full_model_ci$ci.estimates
+full_model_ci_estimatesl_rownames <- rownames(full_model_ci_estimates)
+full_model_ci_estimates_table <- tibble(effect_ci = full_model_ci_estimatesl_rownames, full_model_ci_estimates)
+write_csv(full_model_ci_estimates_table, here("results/md1_ci_model.csv"))
+```
+
+```{r bayes-factors, eval = FALSE}
+# Run the full Bayesian models with and without correlations for pilot data
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Prepare computing environment for Bayesian analysis
+n_cores <- 4
+n_chains <- 4L
+n_threads <- 3
+n_cpu <- n_cores * n_threads
+total_draws <- 40000
+n_warmup <- 5000
+n_iter <- round((total_draws / n_chains) + n_warmup)
+
+# Run all models
+set.seed(101)
+prior <- prior(student_t(6, 0, 1.5))
+full_model_bayes <- brm(full_model_formula, data = model_data, family = bernoulli,
+                        prior = prior, sample_prior = "yes", 
+                        control = list(adapt_delta = 0.9), backend = "cmdstanr",
+                        iter = n_iter, warmup = n_warmup,
+                        chains = n_chains, cores = n_cores, 
+                        threads = threading(n_threads),
+                        seed = 101, silent = 2
+)
+
+# Calculate Bayes factors by testing hypotheses of estimates = 0
+bfs <- 1 / hypothesis(full_model_bayes, c("conditionostensive = 0", 
+                                          "condition_orderost_first = 0", 
+                                          "trial_num_z = 0", 
+                                          "sexMale:desexedYes = 0", 
+                                          "age_z = 0", 
+                                          "trainability_score_z = 0"))$hypothesis$Evid.Ratio
+model_bfs <- tibble(effect = c("(Intercept)", "Condition", "Condition order", "Trial number", "Sex:desexed", "Age", "Trainability score"), bf = c(NA, bfs))
+write_csv(model_bfs, here("results/md1_model_bfs.csv"))
+```
+
+```{r build-model-table}
+# Build model table
+
+# Read in model tables to save time
+full_model_table <- read_csv(here("results/md1_full_model.csv"), show_col_types = FALSE)
+drop1_full_model <- read_csv(here("results/md1_drop_model.csv"), show_col_types = FALSE)
+model_bfs <- read_csv(here("results/md1_model_bfs.csv"), show_col_types = FALSE)
+model_cis <- read_csv(here("results/md1_ci_model.csv"), show_col_types = FALSE)
+
+# Clean and standardize effects for combining tables
+full_model_trimmed <- clean_effects(full_model_table)
+model_cis_trimmed <- clean_effects(model_cis)
+drop1_full_model_trimmed <- drop1_full_model |>
+  clean_effects()
+
+# Create table
+model_table <- full_model_trimmed |> 
+  left_join(model_cis_trimmed, by = "effect") |> 
+  left_join(drop1_full_model_trimmed, by = "effect") |>
+  left_join(model_bfs, by = "effect") |> 
+  select(effect, Estimate, SE = `Std. Error`, `Lower CI` = X2.5., `Upper CI` = X97.5., 
+         `Chi-square` = LRT, df = npar, p = `Pr(Chi)`, `BF` = bf) |>
+  mutate(across(where(is.numeric), ~ round(.x, 2))) |> 
+  remove_rownames()
+```
+
+```{r condition-plot, include = FALSE}
+# Create overall condition plots
+
+# Calculate within-subject confidence intervals for plot
+ci_data <- summary(wsci(data = agg_data, id = "subjectID", factors = c("condition"), dv = "mean_correct")) |> 
+  mutate(cond_num = case_when(condition == "nonostensive" ~ 1,
+                              condition == "ostensive" ~ 2,
+                              condition == "odor" ~ 3,
+                              .default = NA))
+
+# Ostensive/non-ostensive plot
+condition_plot <- agg_data_noodor |> 
+  ggplot(aes(x = condition, y = mean_correct)) +
+  geom_line(aes(x = cond_jitter, group = subjectID),
+            color = "gray", alpha = 0.25) +
+  geom_point(data = agg_data_nonostensive,
+             aes(x = cond_jitter),
+             color = "#0072B2", size = 1.5, alpha = 0.25) +
+  geom_point(data = agg_data_ostensive,
+             aes(x = cond_jitter),
+             color = "#D55E00", size = 1.5, alpha = 0.25, ) +
+  geom_half_violin(data = agg_data_nonostensive, 
+                   aes(x = cond_num, y = mean_correct),
+                   position = position_nudge(x = -0.25), side = "l", fill = "#0072B2", alpha = 0.5) +
+  geom_half_violin(data = agg_data_ostensive, 
+                   aes(x = cond_num, y = mean_correct),
+                   position = position_nudge(x = 0.25), side = "r", fill = "#D55E00", alpha = 0.5) +
+  geom_pointrange(data = ci_data |> filter(condition != "odor"), 
+                  aes(x = cond_num, y = mean, ymin = lower_limit, ymax = upper_limit), 
+                  color = "black", size = 0.15, linewidth = 0.6) +
+  geom_line(data = ci_data |> filter(condition != "odor"), 
+            aes(x = cond_num, y = mean), color = "black") +
+  geom_hline(yintercept = 0.5, lty = 2, col = "firebrick") +
+  xlab("Condition") +
+  ylab("Proportion correct") +
+  scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+
+# Odor control
+odor_plot <- ggplot(data = agg_data_odor, aes(x = as.numeric(condition), y = mean_correct)) +
+  geom_jitter(data = agg_data_odor, aes(x = as.numeric(condition)), 
+              color = "grey", size = 1.5, alpha = 0.5, height = 0, width = 0.2) +
+  geom_half_violin(data = agg_data_odor, aes(x = as.numeric(condition), y = mean_correct), 
+                   position = position_nudge(x = -0.3), side = "l", width = 0.2, fill = "grey", alpha = .5) +
+  geom_hline(yintercept = 0.5, lty = 2, col = "firebrick") +
+  geom_pointrange(data = ci_data |> filter(condition == "odor"), 
+                  aes(y = mean, ymin = lower_limit, ymax = upper_limit), 
+                  color = "grey50", size = 0.15, linewidth = 0.6) +
+  xlab("") +
+  ylab("Proportion correct") +
+  scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+
+# Combine plots
+condition_plot + odor_plot + 
+  plot_layout(widths = c(2, 1)) +
+  plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
+ggsave(here("figures/md1_conditions.png"), width = 10, height = 8, scale = 0.5)
+```
+
+```{r site-comparison}
+# Create site-specific condition plots
+
+# Calculate within-subject confidence intervals for plot
+ci_data_site <- summary(wsci(data = agg_data, id = "subjectID", factors = c("site", "condition"), dv = "mean_correct")) |> 
+  mutate(cond_x = if_else(condition == "nonostensive", 1, 2, NA))
+
+# Calculate t-tests
+site_results <- data.frame(site = sites, results = unlist(map(sites, ost_nonost_ttests)))
+agg_data_noodor2 <- agg_data_noodor |> 
+  left_join(site_results, by = "site")
+
+# Ostensive/non-ostensive plot
+site_condition_plot <- ggplot(data = agg_data_noodor, aes(x = condition, y = mean_correct)) +
+  geom_line(aes(x = cond_num, group = subjectID), color = "gray", alpha = 0.25) +
+  geom_point(data = agg_data_noodor |> filter(condition == "nonostensive"), 
+             aes(x = cond_num), color = "#0072B2", size = 1.5, alpha = 0.125) +
+  geom_point(data = agg_data_noodor |> filter(condition == "ostensive"), 
+             aes(x = cond_num), color = "#D55E00", size = 1.5, alpha = 0.125, ) +
+  geom_hline(yintercept = 0.5, lty = 2, col = "firebrick") +
+  geom_pointrange(data = ci_data_site |> filter(condition != "odor"), 
+                  aes(x = cond_x, y = mean, ymin = lower_limit, ymax = upper_limit), 
+                  color = "black", size = 0.1, linewidth = 0.6) +
+  geom_line(data = ci_data_site |> filter(condition != "odor"), aes(x = cond_x, y = mean), color = "black") +
+  facet_wrap(vars(site)) +
+  geom_text(data = agg_data_noodor2, 
+            aes(x = -Inf, y = Inf, label = results),
+            hjust   = -0.5,
+            vjust   = 1.1, 
+            size = 2.5) +
+  xlab("Condition") +
+  ylab("Proportion correct") +
+  scale_x_continuous(breaks = c(1, 2), labels = c("Non", "Ost"), 
+                     limits = c(0.5, 2.5)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1.4)) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+ggsave(here("figures/md1_conditions_sites.png"), width = 8, height = 10, scale = 0.75)
+```
+
+The dogs did not choose the baited cup differently in the Ostensive and Non-ostensive conditions (_X_^2^(`r model_table[model_table$effect == "Condition", "df"]`) = `r printnum(model_table[model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table[model_table$effect == "Condition", "p"])`) (Figure \@ref(fig:cond-chance)A). This pattern was consistent across almost all sites (Figure S7). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table \@ref(tab:tbl-glmm-flex)). 
+
+```{r check-assumptions, eval = FALSE}
+# Check assumptions and model stability
+
+# Plot visualizations of model checks
+check_model(full_model)
+
+# Check for collinearity
+check_collinear <- lm(correct ~ condition + condition_order + trial_num_z + 
+                        sex + desexed + age_z + trainability_score_z,
+                      data = model_data
+)
+vif(check_collinear)
+# Collinearity was no issue (maximum variance inflation factor: 1.11)
+
+## Model stability
+## One subject at a time excluded to assess the impact of outliers.
+model_stability_md1_subj <- glmm.model.stab(model.res = full_model, use = c("subjectID"), para = TRUE)
+model_stability_md1_subj$detailed$warnings
+model_stability_md1_subj_warnings <- as.data.frame(round(model_stability_md1_subj$summary[, -1], 3))[1:9,]
+
+png("figures/md1_full_model_stability_plot_subj.png")
+m.stab.plot(round(model_stability_md1_subj$summary[, -1], 3)[1:9,])
+dev.off()
+
+## One site at a time excluded to assess the impact of outliers.
+model_stability_md1_site <- glmm.model.stab(model.res = full_model, use = c("site"), para = TRUE)
+model_stability_md1_site$detailed$warnings
+
+png("figures/md1_full_model_stability_plot_site.png")
+m.stab.plot(round(model_stability_md1_site$summary[, -1], 3)[1:9,])
+dev.off()
+# The model appeared to be stable with respect to the fixed effects (see full_model_stability_plot_site and full_model_stability_plot_subject).
+```
+
+```{r tbl-glmm-flex}
+glmm_table <- flextable(model_table) |> 
+  width(j = 1, 1) |> 
+  width(j = 3:9, 0.55) |>
+  fontsize(size = 10) |> 
+  font(part = "all", fontname = "Times New Roman") |> 
+  set_caption("Results of GLMM of the dogs' choice performance") |> 
+  footnote(i = 1, j = 9,
+           value = as_paragraph("Bayes factors for hypothesis that the predictor estimate is not 0. Thus, Bayes factors < 0.1 represent strong evidence that predictor estimates = 0."),
+           ref_symbols = "*", part = "header")
+set_table_properties(glmm_table, width = 1, layout = "fixed")
+# save_as_html(glmm_table, path = here("docs/glmm_table.html"))
+```
+
+
+```{r cond-chance, fig.cap = paste0("Violin and dot plot of dogs' performance (N = ", n_subjects, ") across the (A) Non-ostensive and Ostensive conditions and the (B) Odor Control condition. The red dashed lines show the chance level of 0.5. Dots represent the mean proportion correct for each individual. The grey lines connect dots representing the same individuals. The error bars represent 95\\% within-subjects confidence intervals; the filled circles on top of the error bars show the means per condition."), out.width = "100%"}
+knitr::include_graphics(path = here("figures/md1_conditions.png"))
+```
+
+
+### _Exploratory Analyses_
+
+#### _Handler Bias_
+
+```{r model-building-bias, eval = FALSE}
+# Build and run model for handler bias effect
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Define full models (with and without correlations in random effects)
+fixed_effects_bias <- "correct ~ condition + condition_order + trial_num_z + sex*desexed + age_z + trainability_score_z + handler_bias + " 
+bias_model_formula <- paste(fixed_effects_bias, random_effects_nocorr)
+
+# Set model control parameters and random seed
+contr <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000000), calc.derivs = FALSE)
+set.seed(100)
+
+# Run bias model without correlations
+bias_model <- glmer(bias_model_formula, family = binomial, 
+                    data = model_data, control = contr, nAGQ = 0)
+
+bias_model_table <- as.data.frame(summary(bias_model)$coefficients) |>
+  rownames_to_column(var = "effect_bias")
+write_csv(bias_model_table, here("results/md1_bias_model.csv"))
+
+## Calculate likelihood ratio test
+drop1_bias_model <- drop1(bias_model, test = "Chisq", control = contr)
+drop1_bias_model_rownames <- rownames(drop1_bias_model)
+drop1_bias_model_table <- tibble(effect_drop = drop1_bias_model_rownames, drop1_bias_model)
+write_csv(drop1_bias_model_table, here("results/md1_drop_bias_model.csv"))
+```
+
+```{r read-models-bias}
+# Build model table for handler bias effect
+
+# Read in model tables to save time
+bias_model_df <- read_csv(here("results/md1_bias_model.csv"), show_col_types = FALSE)
+drop1_bias_model <- read_csv(here("results/md1_drop_bias_model.csv"), show_col_types = FALSE)
+
+bias_model_trimmed <- clean_effects(bias_model_df)
+drop1_bias_model_trimmed <- drop1_bias_model |>
+  clean_effects()
+
+bias_model_table <- bias_model_trimmed |> 
+  left_join(drop1_bias_model_trimmed, by = "effect") |>
+  select(effect, Estimate, SE = `Std. Error`, `Chi-square` = LRT, df = npar, p = `Pr(Chi)`) |>
+  mutate(across(where(is.numeric), ~ round(.x, 2))) |> 
+  remove_rownames()
+```
+
+One of our departures from pre-registration involved 8 of our 20 sites allowing at least some of the handlers/guardians to potentially view the cuing and baiting process of the trials. The confirmatory analyses presented previously included all 20 sites, but here we conducted an exploratory analysis testing whether the potential of handler viewing influenced dog responses. To test this, we dummy coded all sites as either having the potential or no potential for cuing. We then added this variable as a fixed effect to the GLMM investigating condition effects on responses. The dogs did not choose the baited cup differently across sites with or without the potential for cuing (_X_^2^(`r bias_model_table[bias_model_table$effect == "Handler bias", "df"]`) = `r printnum(bias_model_table[bias_model_table$effect == "Handler bias", "Chi-square"])`, _p_ = `r printnum(bias_model_table[bias_model_table$effect == "Handler bias", "p"])`).
+
+
+#### _Breed Group Effects_
+
+```{r model-building-breed, include = FALSE}
+# Build models for breed group effects
+
+# Center and scale variables for modeling
+breed_model_data <- included_data |>
+  filter(grepl("ostensive", condition) & !is.na(breed_group), #filter out mixed breeds
+         !breed_group %in% c("Scent hounds", "Dachshunds", "Sighthounds")) |> #filter out breed groups with less than 8 individuals
+  mutate(
+    age_z = as.numeric(scale(age, scale = TRUE, center = TRUE)),
+    sex_c = as.numeric(scale(
+      as.numeric(as.factor(sex)), scale = FALSE, center = TRUE
+    )),
+    desexed_c = as.numeric(scale(
+      as.numeric(as.factor(desexed)), scale = FALSE, center = TRUE
+    )),
+    condition_c = as.numeric(scale(
+      as.numeric(as.factor(condition)), scale = FALSE, center = TRUE
+    )),
+    condition_order_c = as.numeric(scale(
+      as.numeric(as.factor(condition_order)), scale = FALSE, center = TRUE
+    )),
+    trial_num_z = as.numeric(scale(
+      valid_trial, scale = TRUE, center = TRUE
+    )),
+    trainability_score_z = as.numeric(scale(
+      training, scale = TRUE, center = TRUE
+    ))
+  )
+
+breed_groups_included<-as.vector(levels(as.factor(breed_model_data$breed_group)))
+pure_bred_n_breedgroup <- length(levels(as.factor(breed_model_data$breed_group)))
+pure_bred_n_subject <- length(levels(as.factor(breed_model_data$subjectID)))
+table(breed_model_data$subjectID, breed_model_data$valid_trial)
+
+# Define full models without correlations in random effects for breed group effects
+breed_random_effects <-
+  "(1 + condition_c + trial_num_z || subjectID) + (1 + condition_c + condition_order_c + trial_num_z + sex_c*desexed_c + age_z + trainability_score_z || site) + (1 + condition_c + condition_order_c + trial_num_z + sex_c*desexed_c + age_z + trainability_score_z || breed_group)"
+breed_model_formula <-
+  paste0(fixed_effects, breed_random_effects)
+```
+
+```{r random-slope-breed, eval = FALSE, include = FALSE}
+### Define full model for breed group effects
+
+# #### check which random sloped to include. 
+# From the registered report stage 1 ms:
+# We will only include random slopes if the corresponding predictor variable varies in at least 50% of the levels of the random intercept. We will only include the random slope of the interaction if there is sufficient variation in both of its terms in at least 50% of the levels of the random intercept. We will only include the correlations between random intercepts and random slopes if including them results in a model with better fit (i.e., smaller log-likelihood).
+xx.fe.re <- fe.re.tab(fe.model = "correct ~ condition + condition_order + trial_num_z + sex*desexed + age_z + trainability_score_z",
+                      re = "(1|subjectID) + (1|site) + (1|breed_group)", 
+                      data = breed_model_data)
+xx.fe.re$summary
+```
+
+```{r run-model-breed, eval = FALSE, include = FALSE}
+# Run the full models without correlations for breed group effects
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+breed_model <- glmer(breed_model_formula, data = breed_model_data, 
+                     family = binomial, control = contr)
+breed_model_table <- as.data.frame(summary(breed_model)$coefficients) |>
+  rownames_to_column(var = "effect_full")
+write_csv(breed_model_table, here("results/md1_breed_model.csv"))
+
+# Calculate likelihood ratio test
+drop1_breed_model <- drop1(breed_model, test = "Chisq", control = contr)
+drop1_breed_model_rownames <- rownames(drop1_breed_model)
+drop1_breed_model_table <- tibble(effect_drop = drop1_breed_model_rownames, drop1_breed_model)
+write_csv(drop1_breed_model_table, here("results/md1_breed_drop_model.csv"))
+```
+
+```{r bootstrap-cis-breed, eval = FALSE}
+# Calculate bootstrapped 95% confidence intervals for model estimates for breed groups
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+set.seed(301)
+breed_model2 <- glmer(breed_model_formula, data = breed_model_data, 
+                      family = binomial,
+                      control = glmerControl(optimizer = "bobyqa", 
+                                             optCtrl = list(maxfun = 10000000), 
+                                             calc.derivs = FALSE))
+
+breed_model_ci <- boot.glmm.pred(model.res = breed_model2, excl.warnings = TRUE, 
+                                 nboots = 1000, para = TRUE, n.cores = 20, 
+                                 level = 0.95)
+breed_model_ci_estimates <- breed_model_ci$ci.estimates
+breed_model_ci_estimatesl_rownames <- rownames(breed_model_ci_estimates)
+breed_model_ci_estimates_table <- tibble(effect_ci = breed_model_ci_estimatesl_rownames, breed_model_ci_estimates)
+write_csv(breed_model_ci_estimates_table, here("results/md1_breed_model_cis.csv"))
+```
+
+```{r bayes-factors-breed, eval = FALSE}
+# Run the full Bayesian models with and without correlations for pilot data
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Run model
+breed_model_bayes <- brm(breed_model_formula, data = model_data, 
+                         family = bernoulli, #save_pars = save_pars(all = TRUE), 
+                         prior = prior, sample_prior = "yes", 
+                         control = list(adapt_delta = 0.9),
+                         iter = n_iter, warmup = n_warmup,
+                         chains = n_chains, cores = n_cores, backend = "cmdstanr", 
+                         threads = threading(n_threads),
+                         seed = 102, silent = 2
+)
+
+# Calculate Bayes factors by testing hypotheses of estimates = 0
+breed_bfs <- 1 / hypothesis(breed_model_bayes, c("conditionostensive = 0", 
+                                                 "condition_orderost_first = 0", 
+                                                 "trial_num_z = 0", 
+                                                 "sexMale:desexedYes = 0", 
+                                                 "age_z = 0", 
+                                                 "trainability_score_z = 0"))$hypothesis$Evid.Ratio
+breed_model_bfs <- tibble(effect = c("(Intercept)", "Condition", "Condition order", "Trial number", "Sex:desexed", "Age", "Trainability score"), bf = c(NA, breed_bfs))
+write_csv(breed_model_bfs, here("results/md1_breed_model_bfs.csv"))
+```
+
+
+```{r build-model-table-breed, include = FALSE}
+# Build model table for breed groups
+
+# Read in model tables to save time
+breed_model_table <- read_csv(here("results/md1_breed_model.csv"), show_col_types = FALSE)
+drop1_breed_model_table <- read_csv(here("results/md1_breed_drop_model.csv"), show_col_types = FALSE)
+breed_model_bfs <- read_csv(here("results/md1_breed_model_bfs.csv"), show_col_types = FALSE)
+breed_model_cis <- read_csv(here("results/md1_breed_model_cis.csv"), show_col_types = FALSE)
+
+# Clean and standardize effects for combining tables
+breed_model_table_trimmed <- clean_effects(breed_model_table)
+drop1_breed_model_table_trimmed <- clean_effects(drop1_breed_model_table)
+breed_model_cis_trimmed <- clean_effects(breed_model_cis)
+
+# Create table
+breedgroups_model_table <- breed_model_table_trimmed |> 
+  left_join(drop1_breed_model_table_trimmed, by = "effect") |>
+  left_join(breed_model_cis_trimmed, by = "effect") |>
+  left_join(breed_model_bfs, by = "effect") |>
+  select(effect, Estimate, SE = `Std. Error`, `Lower CI` = X2.5., `Upper CI` = X97.5., 
+         `Chi-square` = LRT, df = npar, p = `Pr(Chi)`, `BF` = bf) |>
+  mutate(across(c(-df, -effect), ~ printnum(.x, digits = 2)),
+         across(`Chi-square`:BF, ~ str_replace(.x, "  NA", "")),
+         across(`Chi-square`:BF, ~ str_replace(.x, "NA", "")),
+         across(`Chi-square`:BF, ~ str_replace_na(.x, ""))) |> 
+  remove_rownames()
+```
+
+```{r include = FALSE}
+# Create overall condition plots for breed groups
+
+# Aggregate breed data
+breed_group_data_all <- agg_data_noodor |> 
+  drop_na(breed_group) |> 
+  mutate(condition = fct_recode(condition, "Non-ostensive" = "nonostensive", "Ostensive" = "ostensive"))
+
+breed_groups <- breed_group_data_all |> 
+  group_by(subjectID) |> 
+  slice_head(n = 1) |> 
+  ungroup() |> 
+  count(breed_group) |> 
+  filter(n >= 8) |> 
+  pull(breed_group)
+
+breed_group_data <- breed_group_data_all |> 
+  filter(breed_group %in% breed_groups)
+
+# Calculate within-subject confidence intervals for plot
+ci_breed_data <- summary(wsci(data = breed_group_data, id = "subjectID", factors = c("breed_group", "condition"), dv = "mean_correct")) |> 
+    mutate(cond_num = case_when(condition == "Non-ostensive" ~ 1,
+                                condition == "Ostensive" ~ 2,
+                                .default = NA))
+
+# Ostensive/non-ostensive plot
+breed_group_data |> 
+  ggplot(aes(x = fct_rev(breed_group), y = mean_correct, groups = fct_rev(condition), color = condition)) +
+  geom_count(alpha = 0.25, position = position_dodge(width = 0.5), show.legend = FALSE) +
+  geom_hline(yintercept = 0.5, linetype = 2, color = "firebrick") +
+  geom_pointrange(data = ci_breed_data, 
+                  aes(x = fct_rev(breed_group), y = mean, 
+                      ymin = lower_limit, ymax = upper_limit), 
+                  position = position_dodge(width = 0.5), size = 0.25) +
+  geom_text(stat = "count", aes(label = paste0("(N=", after_stat(count),")")), 
+            y = -0.04, size = 2.5, color = "black", hjust = "left") +
+  labs(x = NULL, y = "Mean proportion correct") +
+  scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1.1)) +
+  scale_color_manual(values = c("#0072B2", "#D55E00")) +
+  scale_fill_manual(values = c("#0072B2", "#D55E00")) +
+  coord_flip() +
+  theme_classic() +
+  theme(text = element_text(family = "Arial"),
+        legend.position = c(0.85, 0.86),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 7),
+        legend.key.size = unit(1, "lines"))
+
+ggsave(here("figures/md1_breed_group.png"), width = 12, height = 7, scale = 0.5)
+```
+
+We were not able to conduct the pre-registered breed analysis due to too few breeds with at least 8 individuals. Therefore, we conducted a comparable analysis in which we grouped breeds into 10 groups based on the Fédération Cynologique Internationale (FCI) breed categories. We included in our analysis purebred dogs from breed groups with at least 8 individuals in the sample (N = `r pure_bred_n_subject` of `r pure_bred_n_breedgroup` FCI groups: `r breed_groups_included`). For this subset of data, we fitted a binomial GLMM identical to our main model but including breed group as a random intercept (along with with subject and site ID) and all possible random slope components. Condition had no effect on the dogs' choice performance (_X_^2^(`r breedgroups_model_table[breedgroups_model_table$effect == "Condition", "df"]`) = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "p"])`, _BF_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "BF"])`) (Figure \@ref(fig:breed-group)). None of the control predictor variables (order of condition, trial number within condition, sex, neuter status, age, C-BARQ trainability score) had a effect on the dogs' choice performance (Table S4). The only trend was that dogs that started with the Ostensive condition tended to choose the baited cup less often than dogs that started with the Non-ostensive condition.
+
+```{r eval = FALSE, include = FALSE}
+# Check assumptions and model stability for breed groups
+
+# Plot visualizations of model checks
+check_model(breed_model)
+
+# Check for collinearity
+check_collinear_breed <- lm(correct ~ condition + condition_order + trial_num_z + sex + age_z,
+                            data = breed_model_data)
+vif(check_collinear_breed)
+# Collinearity was no issue (maximum variance inflation factor: 1.02)
+
+# Model stability
+# One subject at a time excluded to assess the impact of outliers.
+
+model_stability_breed <- glmm.model.stab(model.res = breed_model, use = c("subjectID"))
+model_stability_breed$detailed$warnings
+as.data.frame(round(model_stability_breed$summary[, -1], 3))
+
+png("figures/md1_full_model_stability_plot.png")
+m.stab.plot(round(model_stability_breed$summary[, -1], 3))
+dev.off()
+# m.stab.plot(round(model_stability_breed$summary[, -1], 3))
+# The model appeared to be stable with respect to the fixed effects (see full_model_stability_plot).
+```
+
+```{r breed-group, fig.cap = "Plot of dogs' performance in Non-ostensive and Ostensive conditions for each breed group with N >= 8. Orange (Non-ostensive condition) and blue (Ostensive condition) bubbles represent the number of individuals at that performance level. Filled dots represent breed group means per condition, and error bars represent 95\\% within-subjects confidence intervals. The red dashed line shows the chance level of 0.5.", out.width = "100%"}
+knitr::include_graphics(path = here("figures/md1_breed_group.png"))
+```
+
+
+#### _Among-Breed Heritability Effects_
+
+```{r, breed-counts, message = FALSE}
+breed_count <- demographics_included |> 
+  count(breed) |> 
+  filter(n > 2) |> 
+  drop_na() |> 
+  arrange(desc(n))
+breed_n <- nrow(breed_count)
+sub_n <- sum(breed_count$N)
+
+eight_plus_breed_n <- nrow(filter(breed_count, n > 7))
+```
+
+Because our final sample included only `r eight_plus_breed_n` breeds with 8 or more individuals, we could not meaningfully implement the pre-registered heritability analyses. Therefore, we conducted exploratory heritability models using a relaxed threshold for breed inclusion. We implemented these models for all pure breed dogs with three more more individuals per breed (`r breed_n` breeds; `r sub_n` individuals) that were also represented in the genetic data. Because we did not differentiate between poodles of different sizes (e.g., standard, miniature, toy) when recording breed information for our participants, we averaged genomic data across poodles of all sizes when calculating our breed average identity-by-state matrix. Additionally, because this resulted in a breed category characterized by substantial variation in body mass, we eliminated body mass as a covariate in the heritability models, retaining only covariates for dog sex and age. 
+
+```{r ibs-matrix, eval = FALSE}
+# Create breed average identity-by-state (IBS) matrix from an individual IBS matrix.
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+ibs_mat <- fread("md1_ibs_matrix.txt", sep = " ", header = FALSE)
+ibs_ids <- fread("md1_ibs_matrix_ids.txt", sep = "\t", header = FALSE)
+colnames(ibs_ids) <- c("breed", "id")
+
+# Associate ids with matrix
+colnames(ibs_mat) <-  ibs_ids$id
+ibs_mat$indiv1 <- ibs_ids$id
+
+# Make data long
+ibs_long <- ibs_mat |> 
+  pivot_longer(-indiv1, names_to = "indiv2", values_to = "ibs") |> 
+  filter(ibs != 1.0) |> 
+  mutate(breed1 = str_split(indiv1, pattern = "_", simplify = T)[,1], 
+         breed2 = str_split(indiv2, pattern = "_", simplify = T)[,1],
+         breed1 = ifelse(breed1 %in% c("MPOO","SPOO","TPOO"), "POOD", breed1),
+         breed2 = ifelse(breed2 %in% c("MPOO","SPOO","TPOO"), "POOD", breed2),
+         breed1 = sub("JRT", "JACK", breed1),
+         breed2 = sub("JRT", "JACK", breed2))
+
+# Group by both breeds and average the ibs for all individuals.
+ibs_avg <- ibs_long |> 
+  group_by(breed1, breed2)|> 
+  summarise(avg = mean(ibs), .groups = "drop") 
+
+# Make wide
+ibs_wide <- pivot_wider(ibs_avg, names_from = breed1, values_from = avg) |> 
+  rename(breed = breed2)
+ibs_wide_check <- ibs_wide |> 
+  column_to_rownames(var = "breed")
+
+table(rownames(ibs_wide_check) == colnames(ibs_wide_check))
+
+# Write to file
+write_csv(ibs_wide, "results/breed_ibs.csv")
+```
+
+```{r prepare-heritability, eval = FALSE}
+# Prepare data for heritability analysis
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+# Get breed abbreviations
+breed <- c("Airedale Terrier", "American Staffordshire Terrier", "Australian Cattle Dog", "Australian Shepherd", "Beagle", "Belgian Malinois", "Belgian Tervuren", "Bernese Mountain Dog", "Border Collie", "Boston Terrier", "Boxer", "Bulldog", "Cavalier King Charles Spaniel", "Chihuahua", "Collie (Rough/Smooth)", "Dachshund (Longhaired/Smooth/Wirehaired)", "Doberman Pinscher", "English Cocker Spaniel", "English Springer Spaniel", "Flat-Coated Retriever", "French Bulldog", "German Shepherd Dog", "German Shorthaired Pointer", "Golden Retriever", "Greyhound", "Havanese", "Irish Setter", "Irish Terrier", "Irish Water Spaniel", "Jack Russell Terrier", "Japanese Chin", "Keeshond", "Australian Kelpie", "Labrador Retriever", "Maltese", "Miniature Schnauzer", "Nova Scotia Duck-Tolling Retriever", "Pembroke Welsh Corgi", "Poodle (standard, medium, miniature, toy)", "Portuguese Water Dog", "Pug", "Rottweiler", "Shetland Sheepdog", "Shiba Inu", "Siberian Husky", "Spinone Italiano", "Staffordshire Bull Terrier", "Vizsla", "West Highland White Terrier", "Whippet", "Yorkshire Terrier")
+breed_abbr <- c("AIRT", "AMST", "AUCD", "AUSS", "BEAG", "BMAL", "TURV", "BMD", "BORD", "BOST", "BOX", "BULD", "CKCS", "CHIH", "COLL", "DACH", "DOBP", "ECKR", "ESSP", "FCR", "FBUL", "GSD", "GSHP", "GOLD", "GREY", "HAVA", "ISET", "IRIT", "IWSP", "JACK", "CHIN", "KEES", "KELP", "LAB", "MALT", "MSNZ", "NSDT", "PEMB", "POOD", "PTWD", "PUG", "ROTT", "SSHP", "SHIB", "HUSK", "SPIN", "STAF", "VIZS", "WHWT", "WHIP", "YORK")
+breed_key <- data.frame(breed, breed_abbr)
+
+# Get testing data from purebreed dogs
+purebred_data <- included_data |> 
+  filter(grepl("ostensive", condition) & !is.na(breed))
+
+# Limit to breeds in genetic data
+purebred_data <- purebred_data |> 
+  right_join(breed_key, by = "breed")
+
+# Calculate dependent variables for heritability models
+smry <- purebred_data |> 
+  filter(!is.na(choice)) |> 
+  summarise(prop_correct = mean(correct), ntrials = n(), .by = c(site, subjectID, breed_abbr, age, sex, condition)) |> 
+  pivot_wider(id_cols = c(site, subjectID, breed_abbr, age, sex), names_from = condition, values_from = prop_correct) |>   mutate(diff_score = ostensive - nonostensive) |> 
+  arrange(breed_abbr)
+
+# Check all dog IDs unique in smry
+table(duplicated(smry$subjectID)) # good if all false
+
+# Import and process IBS matrix
+ibs <- read_csv("results/breed_ibs.csv", show_col_types = FALSE) |> 
+  filter(breed %in% breed_abbr) |> 
+  select(breed, any_of(sort(breed_abbr))) |> 
+  column_to_rownames(var = "breed")
+
+# Check rows and columns are identical
+table(rownames(ibs) == colnames(ibs))
+
+# Build correspondence matrix
+id_breed <- smry |> 
+  select(id = subjectID, breed = breed_abbr)
+total_n <- nrow(id_breed)
+breed_matrix <- matrix(nrow = total_n, ncol = nrow(ibs), data = 0)
+colnames(breed_matrix) <- colnames(ibs)
+idm_setup <- bind_cols(id_breed, breed_matrix)
+
+for (i in 1:nrow(idm_setup)){
+  breed <- as.character(idm_setup$breed[i])
+  idm_setup[i, breed] <- 1
+}
+
+idm_setup <- idm_setup |> 
+  column_to_rownames(var = "id") |> 
+  select(-breed)
+
+# Check that there is only one 1 per row
+table(rowSums(idm_setup, na.rm = F))
+
+# Expand genetic relationship matrix based on breed averages and set diagonal to 1 (identity w/ self)
+km_setup <- as.matrix(ibs)
+Z <- as.matrix(idm_setup)
+K <- km_setup
+ind_K <- Z%*%K%*%t(Z)
+diag(ind_K) <- 1
+
+# Check if smry order is same as 
+table(rownames(ind_K) == smry$subjectID)
+
+# Check the individual level breed matrix
+check_dogs <- sample(smry$subjectID, size = 10)
+combos <- combinations(n = length(check_dogs), r = 2, v = check_dogs, repeats.allowed = F) |> 
+  as.data.frame() |> 
+  rename(id1 = V1, id2 = V2) |> 
+  mutate(i_ibs = NA_real_, b_ibs = NA_real_)
+
+for (i in 1:nrow(combos)) {
+  i_ibs <- ind_K[rownames(ind_K) %in% combos$id1[i], colnames(ind_K) %in% combos$id2[i]]
+  breed1 <- smry$breed_abbr[smry$subjectID == combos$id1[i]]
+  breed2 <- smry$breed_abbr[smry$subjectID == combos$id2[i]]
+  b_ibs <- K[rownames(K) %in% breed1, colnames(K) %in% breed2]
+  combos$i_ibs[i] <- i_ibs; combos$b_ibs[i] <- b_ibs
+  stopifnot(i_ibs == b_ibs)
+}
+
+# Write files
+Z_mat <- rownames_to_column(as.data.frame(Z))
+ind_K <- rownames_to_column(as.data.frame(ind_K))
+write_csv(smry, file = "results/cognitive_data_for_h2_models.csv")
+write_csv(Z_mat, file = "results/zmatrix.csv")
+write_csv(ind_K, file = "results/kmatrix.csv")
+```
+
+```{r run-heritability-model, eval = FALSE}
+# Run heritability models
+# Output is saved locally to save time, so this code chunk is not evaluated during knitting
+
+color_scheme_set("brightblue")
+#bayesplot_theme_set(theme_bw() + theme(text=element_text(family="sans")))
+my_seed <- 2023
+
+# Import data
+behavioral_data <- read_csv("results/cognitive_data_for_h2_models.csv")
+K <- read_csv("results/kmatrix.csv") |> 
+  column_to_rownames() |> 
+  as.matrix()
+
+# View raw distributions
+hist(behavioral_data$ostensive)
+hist(behavioral_data$nonostensive)
+hist(behavioral_data$diff_score)
+hist(behavioral_data$age)
+
+# Get breeds with at least 3 subjects
+breeds_with_3 <- behavioral_data |> 
+  count(breed_abbr) |> 
+  filter(n > 2) |> 
+  pull(breed_abbr)
+
+# Filter data to breeds with at least 3 subjects
+behavioral_data <- behavioral_data |> 
+  filter(breed_abbr %in% breeds_with_3)
+
+# Write information on this dataset for later reporting
+breed_table <- count(behavioral_data, breed_abbr) |> 
+  left_join(breed_key, by = "breed_abbr") |> 
+  mutate(breed = ifelse(breed_abbr == "POOD", "Poodle", breed)) |> 
+  select(breed, N = n)
+write_csv(breed_table, file = "results/h2_model_data_table.csv")
+
+# Vector of data to be used in models
+dv_seq <- c("ostensive", "nonostensive", "diff_score")
+
+# Fit the models
+results <- map(.x = dv_seq, .f = function(y) {
+  
+  df <- behavioral_data
+  dv <- y
+
+  # Limit A matrix to subjects in data
+  A <- K[rownames(K) %in% df$subjectID, colnames(K) %in% df$subjectID]
+  
+  # Z score age
+  df <- mutate(df, age = as.vector(scale(age)))
+  
+  # Set up appropriate DV
+  mod_dat <- select(df, trait = all_of(dv), subjectID, age, sex)
+  mod_dat$trait <- as.vector(scale(mod_dat$trait))
+  
+  # Set a weakly regularizing prior on the betas
+  b_prior <- prior(normal(0,1), class = "b")
+  
+  # Fit model
+  mod <- brm(trait ~ age + sex + (1|p|gr(subjectID, cov = A)),
+             data = mod_dat,
+             data2 = list(A = A),
+             cores = 4,
+             silent = F,
+             iter = 24000,
+             warmup = 2000,
+             thin = 10,
+             control = list(adapt_delta = 0.99),
+             seed = my_seed,
+             prior = b_prior
+  )
+  
+  # Return model and info on data and dependent variable used
+  return(list(model = mod, dv = y))
+})
+
+# Look at the posterior checks
+walk(results, .f = function(x) {
+  my_title <- x$dv
+  print(pp_check(x$model) + labs(title = my_title))
+})
+
+# Plot qq plots
+walk(results, .f = function(x) {
+  my_title <- x$dv
+  my_resids <- residuals(x$model)
+  qqnorm(my_resids, main = my_title)
+})
+
+# Check ESS etc
+results[[1]]
+results[[2]]
+results[[3]]
+
+# Create tidy results
+h2_model_coefs <- map_dfr(results, function(x) {
+  out <- tidy(x$model)
+  out <- mutate(out, dv = x$dv)
+  out <- select(out, dv, everything())
+})
+write_csv(h2_model_coefs, file = "results/h2_model_coefs.csv")
+
+# Get the h2 estimates
+h2 <- map_dfc(results, .f = function(x) {
+  mod <- x$model
+  tmp <- as_draws_df(mod, variable = c("sd_subjectID__Intercept","sigma"))
+  tmp <- tmp[, 1:2]
+  colnames(tmp) <- c("sd_g", "sd_e")
+  tmp <- mutate(tmp, h2 = (sd_g^2) / ((sd_g^2) + (sd_e^2)))
+  out <- select(tmp, h2)
+  colnames(out) <- x$dv
+  return(out)
+})
+write_csv(h2, file = "results/h2_posteriors.csv")
+
+mcmc_areas(h2, prob = 0.9)
+
+# Posteriors are assymetric and centered near 0.  Don't use mean/median or quantiles
+# Get posterior modes and HDIs
+# hdci gets the highest density continuous interval
+h2_summaries <- map_dfr(colnames(h2), function(myvar) {
+  tmp <- select(h2, trait = myvar)
+  draws <- as_draws(tmp)
+  out <- mode_hdci(draws, .width = 0.90)
+  out <- mutate(out, dv = myvar)
+})
+h2_summaries <- mutate_if(h2_summaries, is.numeric, ~ round(., 2))
+write_csv(h2_summaries, file = "results/h2_summary_statistics.csv")
+```
+
+```{r plot-heritability, message = FALSE, return = FALSE}
+# Plot posterior distribution of heritability values
+
+# Import posteriors and summary statistics
+posteriors <- read_csv(here("results/h2_posteriors.csv"))
+smry <- read_csv(here("results/h2_summary_statistics.csv")) |> 
+  select(variable = dv, mode = trait, lower = .lower, upper = .upper) 
+
+# Process posteriors
+post <- posteriors |> 
+  rename(`difference score` = diff_score)|> 
+  pivot_longer(everything(), names_to = "condition", values_to = "heritability") |> 
+  mutate(condition = str_replace(condition, "nonost", "Non-ost"),
+         condition = str_to_sentence(condition))
+
+# Plot posteriors
+heritability_plot <- ggplot(post, aes(y = condition, x = heritability)) +
+  stat_halfeye(point_interval = mode_hdci, 
+               .width = c(0.9), fill = "#0072B2", alpha = 0.7) +
+  labs(x = "Heritability", y = "") +
+  theme_classic(base_size = 12) +
+  theme(text = element_text(family = "Arial")
+  )
+ggsave(here("figures/md1_heritability.png"), width = 6, height = 6, scale = 0.75)
+```
+
+We present the posterior distributions of heritability estimates in Figure \@ref(fig:heritfig). Posterior distributions tended to be asymmetrical with long tails and thus we summarize these results with the posterior mode and 90% highest density continuous intervals. In the majority of cases, the posterior mode was near 0 (Non-ostensive: `r smry$mode[which(smry$variable == "nonostensive")]`, 90% highest-density continuous interval [`r smry$lower[which(smry$variable == "nonostensive")]`, `r smry$upper[which(smry$variable == "nonostensive")]`]; Ostensive: `r smry$mode[which(smry$variable == "ostensive")]`, 90% highest-density continuous interval [`r smry$lower[which(smry$variable == "ostensive")]`, `r smry$upper[which(smry$variable == "ostensive")]`]), indicating minimal genetic influence on the cognitive measures in this sample. The generally diffuse posterior distributions suggest that we cannot make confident inferences about genetic contributions to variance in the current sample.
+
+```{r, heritfig, fig.cap = "Posterior distributions of heritability estimates for models including dogs from breeds with three or more individuals with cognitive data. Points reflect the posterior mode and lines reflect the 90\\% highest continuous posterior interval for each model.", out.width = "100%"}
+knitr::include_graphics(path = here("figures/md1_heritability.png"))
+```
+
+#### _Within-Subject Reliability_
+
+```{r split-half, include = FALSE}
+# Calculate and plot split-half reliability
+
+# Split data into odd and even trials
+split_half_data_agg <- included_data |>
+  mutate(test_half = ifelse(valid_trial %%2 , "odd_trials", "even_trials"))|>
+  group_by(site, subjectID, test_half) |>
+  summarise(mean_correct = mean(correct)) |>
+  ungroup() |>
+  pivot_wider(names_from = test_half, values_from = mean_correct)
+
+# Calculate Pearson correlation of odd vs even trial performance
+sh_cor <- cor.test(split_half_data_agg$odd_trials, split_half_data_agg$even_trials)
+sh_cor_bf <- correlationBF(split_half_data_agg$odd_trials, split_half_data_agg$even_trials)
+
+#### Plot odd and even trial performance
+split_odd_even_plot <- ggplot(split_half_data_agg, aes(x = even_trials, y = odd_trials))+ #col = site
+  geom_abline(intercept = 0, slope = 1, lty = 2, alpha = 0.7, linewidth = 0.5)+
+  stat_cor(method = "pearson", aes(x = even_trials, y = odd_trials, label = paste(..r.label..)),cor.coef.name = "r", inherit.aes = F, size = 3)+
+  geom_count(alpha = .5)+
+  geom_smooth(method=lm, color="firebrick", alpha = 0.5, linetype = 2, se = FALSE )+
+  labs (x = "Even trials", y = "Odd trials")+
+  xlim(0,1)+ 
+  ylim(0,1) +
+  theme_classic()+
+  theme(text = element_text(family = "Arial"),
+        legend.position = c(0.95, 0.2))
+```
+
+```{r condition-reliability, include = FALSE}
+# Calculate individual reliability across conditions
+
+# Aggregate data by condition
+con_half_data_agg <- included_data |>
+  group_by(site, subjectID, condition) |>
+  summarise(mean_correct = mean(correct)) |>
+  ungroup() |>
+  pivot_wider(names_from = condition, values_from = mean_correct)
+
+# Correlate individual performance across conditions
+con_cor <- cor.test(con_half_data_agg$nonostensive, con_half_data_agg$ostensive)
+con_cor_bf <- correlationBF(con_half_data_agg$nonostensive, con_half_data_agg$ostensive)
+
+#### Plot correlation between conditions
+split_conditions_plot <- ggplot(con_half_data_agg, aes(x = nonostensive, y = ostensive))+ #col = site
+  geom_abline(intercept = 0, slope = 1, lty = 2, alpha = 0.7, linewidth = 0.5)+
+  stat_cor(method = "pearson", aes(x = nonostensive, y = ostensive, label = paste(..r.label..)),cor.coef.name = "r", inherit.aes = F, size = 3)+
+  geom_count(alpha = .5)+
+  geom_smooth(method=lm, color="firebrick", alpha=0.5, lty=2,se = FALSE )+
+  labs (x = "Non-ostensive trials", y = "Ostensive trials")+
+  xlim(0,1) + 
+  ylim(0,1) +
+  theme_classic() +
+  theme(text = element_text(family = "Arial"),
+        legend.position = c(0.95, 0.2))
+```
+
+To examine the extent to which individual performance was stable across trials and conditions, we performed a split-half reliability analysis. We first split the data into odd and even trials (irrespective of condition) and aggregated the odd and even trial performance (mean individual performance). However, we found no evidence for a correlation between their performance in odd and even trials (Pearson correlation: `r apa_corr(sh_cor)`, `r format_bf(sh_cor_bf)`; Figure  S8A).
+Additionally, we aggregated the Ostensive and Non-ostensive condition performance of each subject. While the correlation between the two conditions was small in magnitude, it was statistically significant, indicating a positive relationship between individuals' performance in the two conditions (`r apa_corr(con_cor)`, `r format_bf(con_cor_bf)`; Figure S8B).
+
+
+#### _Response Strategies_
+
+```{r response-strategies, include = FALSE}
+# Assess win-stay, lose-shift and win-shift, lose-stay response strategies
+
+# Calculate strategies
+strategy_data <- included_data |>
+  filter(condition != "odor") |>
+  mutate(
+    previous_trial_correct = as.numeric(ifelse(
+      subjectID == lag(subjectID), lag(correct), ""
+    )),
+    previous_trial_side = (ifelse(
+      subjectID == lag(subjectID), lag(choice), ""
+    )),
+    win_stay_lose_shift = as.numeric(
+      ifelse(
+        previous_trial_correct == 1 & previous_trial_side == choice,
+        1,
+        ifelse(
+          previous_trial_correct == 0 & previous_trial_side != choice,
+          1,
+          ifelse(
+            previous_trial_correct == 1 &
+              previous_trial_side != choice,
+            0,
+            ifelse(previous_trial_correct == 0 &
+                     previous_trial_side == choice, 0, "")
+          )
+        )
+      )
+    ),
+    win_shift_lose_stay = as.numeric(
+      ifelse(
+        previous_trial_correct == 1 & previous_trial_side != choice,
+        1,
+        ifelse(
+          previous_trial_correct == 0 & previous_trial_side == choice,
+          1,
+          ifelse(
+            previous_trial_correct == 1 &
+              previous_trial_side == choice,
+            0,
+            ifelse(previous_trial_correct == 0 &
+                     previous_trial_side != choice, 0, "")
+          )
+        )
+      )
+    )
+  ) |>
+  filter(valid_trial != 1)
+
+# Aggregate data
+strategy_data_agg <- strategy_data |>
+  group_by(site, subjectID) |>
+  summarise(
+    mean_correct = mean(correct),
+    mean_win_stay_lose_shift = mean(win_stay_lose_shift),
+    mean_win_shift_lose_stay = mean(win_shift_lose_stay)
+  ) |>
+  ungroup() |> 
+  drop_na()
+
+# Calculate Pearson correlation of correct performance and win-stay, lose-shift strategy
+win_stay_cor <- cor.test(strategy_data_agg$mean_correct, strategy_data_agg$mean_win_stay_lose_shift)
+win_shift_cor <- cor.test(strategy_data_agg$mean_correct, strategy_data_agg$mean_win_shift_lose_stay)
+win_stay_cor_bf <- correlationBF(strategy_data_agg$mean_correct, strategy_data_agg$mean_win_stay_lose_shift)
+win_shift_cor_bf <- correlationBF(strategy_data_agg$mean_correct, strategy_data_agg$mean_win_shift_lose_stay)
+
+# Calculate one-sample t-tests compared to chance
+tt_win_stay <-t.test(strategy_data_agg$mean_win_stay_lose_shift, mu=0.5)
+tt_win_shift <-t.test(strategy_data_agg$mean_win_shift_lose_stay, mu=0.5)
+tt_win_stay_bf <-ttestBF(strategy_data_agg$mean_win_stay_lose_shift, mu=0.5)
+tt_win_shift_bf <-ttestBF(strategy_data_agg$mean_win_shift_lose_stay, mu=0.5)
+
+# Plot win-stay, lose-shift correlations
+win_stay_plot <- ggplot(strategy_data_agg, aes(x = mean_win_stay_lose_shift, y = mean_correct))+ #col = site
+  geom_abline(intercept = 0, slope = 1, lty = 2, alpha = 0.7, linewidth = 0.5)+
+  stat_cor(method = "pearson", aes(x = mean_win_stay_lose_shift, y = mean_correct, label = paste(..r.label..)),cor.coef.name = "r", inherit.aes = F, size = 3)+
+  geom_count(alpha = 0.5)+
+  geom_smooth(method=lm, color="firebrick", alpha=0.5, lty=2,se = FALSE )+
+  labs (x = "Mean win-stay, lose-shift", y = "Mean correct")+
+  xlim(0,1) + 
+  ylim(0,1) +
+  theme_classic()+
+  theme(text = element_text(family = "Arial"),
+        legend.position = c(0.95, 0.2))
+
+# Plot win-shift, lose stay correlations
+win_shift_plot<-ggplot(strategy_data_agg, aes(x = mean_win_shift_lose_stay, y = mean_correct))+ #col = site
+  geom_abline(intercept = 0, slope = 1, lty = 2, alpha = 0.7, linewidth = 0.5)+
+  stat_cor(method = "pearson", aes(x = mean_win_shift_lose_stay, y = mean_correct, label = paste(..r.label..)),cor.coef.name = "r", inherit.aes = F, size = 3)+
+  geom_count(alpha = .5)+
+  geom_smooth(method=lm, color="firebrick", alpha=0.5, lty=2,se = FALSE )+
+  labs (x = "Mean win-shift, lose-stay", y = "Mean correct")+
+  xlim(0,1) + 
+  ylim(0,1) +
+  theme_classic()+
+  theme(text = element_text(family = "Arial"),
+        legend.position = c(0.95, 0.2))
+
+# Plot histograms of strategy distributions
+winshift_hist <- ggplot(strategy_data_agg, aes(x=mean_win_stay_lose_shift)) + 
+  geom_histogram(color="black", fill="grey50", binwidth = 1/14)+
+  theme_classic()+
+  xlab("Mean win-stay, lose-shift")+
+  geom_vline(xintercept=0.5, lty=2) +
+  theme(text = element_text(family = "Arial")
+  )
+winstay_hist<-ggplot(strategy_data_agg, aes(x=mean_win_shift_lose_stay)) + 
+  geom_histogram(color="black", fill="grey50", binwidth = 1/14)+
+  theme_classic()+
+  xlab("Mean win-shift, lose-stay")+
+  geom_vline(xintercept=0.5, lty=2) +
+  theme(text = element_text(family = "Arial")
+  )
+win_stay_plot + win_shift_plot + winshift_hist + winstay_hist + 
+  plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
+ggsave(here("figures/md1_strategies.png"), width = 10, height = 8)
+```
+
+Overall, it is not clear that subjects followed pointing cues often in this task. We were interested in exploring other strategies that the dogs could have employed. Two candidate strategies investigated in a previous pointing study are win-stay, lose-shift and win-shift, lose-stay (Byrne et al., 2020). That is, rather than following cues, the subjects could simply continue choosing the same cup or switch to the other cup depending on whether they received a reward on the previous trial. To test whether dogs were using these strategies, we calculated for each trial (except the first in a block) whether the dogs’ performance followed a win-stay, lose-shift or a win-shift, lose-stay strategy based on their performance in the previous trial. We found that the win-stay, lose-shift strategy would have been negatively correlated with success (Pearson correlation: `r apa_corr(win_stay_cor)`, `r format_bf(win_stay_cor_bf)`; Figure S9A) and conversely a win-shift, lose-stay strategy was positively correlated with success (`r apa_corr(win_shift_cor)`, `r format_bf(win_shift_cor_bf)`; Figure S9B). These correlations are likely caused by the pseudo-randomization of the baited side (the food was presented no more than two trials in a row on the same side). At a group level, the dogs did not engage in the win-stay, lose-shift (`r apa_ttest(tt_win_stay, digits = 2)`, `r format_bf(tt_win_stay_bf)`; Figure S9C) or the win-shift, lose-stay strategy (`r apa_ttest(tt_win_shift, digits = 2)`, `r format_bf(tt_win_shift_bf)`; Figure S9D) above chance levels (0.5).  
+
+```{r side-bias, include = FALSE}
+# Assess side biases
+
+# Calculate side bias
+side_data <- included_data |> 
+  filter(condition != "odor") |> 
+  mutate(right_location = if_else(location == "R", 1, 0, NA),
+         right_choice = if_else(choice == "R", 1, 0, NA))
+side_means <- side_data |> 
+  summarise(rloc = apa_num(mean(right_location, na.rm = TRUE) * 100, digits = 1),
+            rchoice = apa_num(mean(right_choice, na.rm = TRUE) * 100, digits = 1))
+bias_data <- side_data |> 
+  group_by(subjectID, site) |> 
+  summarise(rloc = mean(right_location, na.rm = TRUE) * 100,
+            rchoice = mean(right_choice, na.rm = TRUE) * 100) |> 
+  mutate(bias = abs(rchoice - rloc))
+biased_dogs <- apa_num(nrow(bias_data[which(bias_data$bias > 10), ]) / nrow(bias_data) * 100, digits = 1)
+location_right <- bias_data |> 
+  ggplot(aes(x = rloc)) +
+  geom_histogram(bins = 25) +
+  xlim(0, 100) +
+  labs(x = "Mean percent correct located right", y = "Number of dogs") +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+choice_right <- bias_data |> 
+  ggplot(aes(x = rchoice)) +
+  geom_histogram(bins = 25) +
+  labs(x = "Mean percent choices right", y = "Number of dogs") +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+
+# Plot overall side bias data
+bias_plot <- bias_data |> 
+    ggplot(aes(x = bias)) +
+    geom_histogram(bins = 10, color = "black", fill = "grey50") +
+    labs(x = "Bias in choices from experienced chance", y = "Number of dogs") +
+    scale_x_continuous(breaks = seq(0, 50, 10)) +
+    theme_classic() +
+    theme(text = element_text(family = "Arial")
+    )
+ggsave(here("figures/md1_bias.png"), width = 6, height = 6, scale = 0.75)
+
+# Plot side bias data per site
+bias_sites <- bias_data |> 
+  ggplot(aes(x = bias)) +
+  # geom_histogram(bins = 20) +
+  geom_density() +
+  facet_wrap(vars(site)) +
+  scale_x_continuous(breaks = seq(0, 50, 10)) +
+  labs(x = "Bias in choices from experienced chance", y = "Density") +
+  theme_classic() +
+  theme(text = element_text(family = "Arial")
+  )
+ggsave(here("figures/md1_bias_sites.png"), width = 8, height = 10, scale = 0.75)
+```
+
+An even simpler strategy would be to simply always choose the same side. Side biases are relatively common in animal choice experiments (Andrade et al., 2001; Miletto Petrazzini, Pecunioso, et al., 2020), including dog studies (Gácsi et al., 2009; Miletto Petrazzini, Mantese, et al., 2020). In our study, this would be a reasonable strategy because it would result in a reward on average every other trial. Overall, in `r side_means$rloc`% of the trials, the food was located on the right side, and dogs choose the right side in `r side_means$rchoice`% of trials. Side biases were relatively common with `r biased_dogs`% of dogs biased more than 10% away from the experienced chance levels (Figure S10). This bias varied substantially across sites (Figure S11).
+
+
+#### _No-Choice_
+
+```{r no-choice}
+# Evaluate no-choice data
+
+# Calculate no-choice frequency
+test_data_md1 <- all_data |> 
+  filter(status == "Included" & grepl("ostensive", condition))
+nochoice_data_md1 <- test_data_md1 |> 
+  mutate(nochoice = if_else(choice == "NC", 1, 0, NA))
+nochoice_subject_data_md1 <- nochoice_data_md1 |> 
+  group_by(subjectID) |> 
+  summarise(mean_nochoice = mean(nochoice, na.rm = TRUE) * 100)
+nochoice_subject_means_data_md1 <- nochoice_subject_data_md1 |> 
+  summarise(mean = mean(mean_nochoice), sd = sd(mean_nochoice), papaja::ci(mean_nochoice), median(mean_nochoice))
+
+# Examine condition effects
+nochoice_data_subjects_condition_md1 <- nochoice_data_md1 |> 
+  group_by(subjectID, condition, condition_order) |> 
+  summarise(mean_nochoice = mean(nochoice, na.rm = TRUE) * 100)
+nochoice_data_condition_md1 <- nochoice_data_subjects_condition_md1 |> 
+  group_by(condition) |> 
+  summarise(mean = mean(mean_nochoice), sd = sd(mean_nochoice), ci = papaja::ci(mean_nochoice), median = median(mean_nochoice)) |> 
+  mutate(lower = mean - ci,
+         upper = mean + ci)
+
+# Examine condition order effects
+nochoice_data_conditionorder_md1 <- nochoice_data_subjects_condition_md1 |> 
+  group_by(condition_order) |> 
+  summarise(mean = mean(mean_nochoice), sd = sd(mean_nochoice), ci = papaja::ci(mean_nochoice), median = median(mean_nochoice)) |> 
+  mutate(lower = mean - ci,
+         upper = mean + ci)
+
+# Examine included/excluded dogs
+individual_subject_data_md1 <- all_data |> 
+  group_by(subjectID) |> 
+  slice_head() |> 
+  mutate(included = if_else(status == "Included", 1, 0, NA), .after = status) |> 
+  ungroup()
+included_condition_order <- individual_subject_data_md1 |> 
+  group_by(condition_order) |> 
+  summarise(percent_included = mean(included) * 100)
+```
+
+For dogs included in this analysis, dogs did not choose a cup (no-choice) in `r apa_num(nochoice_subject_means_data_md1$mean, digits = 1)`±`r apa_num(nochoice_subject_means_data_md1$sd, digits = 1)`% (mean±SD) of the trials (per dog). This differed between conditions with more no-choices in the Non-ostensive (`r apa_num(nochoice_data_condition_md1$mean[which(nochoice_data_condition_md1$condition == "nonostensive")], digits = 1)`%, 95% CI [`r apa_num(nochoice_data_condition_md1$lower[which(nochoice_data_condition_md1$condition == "nonostensive")], digits = 1)`, `r apa_num(nochoice_data_condition_md1$upper[which(nochoice_data_condition_md1$condition == "nonostensive")], digits = 1)`]) condition compared to the Ostensive (`r apa_num(nochoice_data_condition_md1$mean[which(nochoice_data_condition_md1$condition == "ostensive")], digits = 1)`%, 95% CI [`r apa_num(nochoice_data_condition_md1$lower[which(nochoice_data_condition_md1$condition == "ostensive")], digits = 1)`, `r apa_num(nochoice_data_condition_md1$upper[which(nochoice_data_condition_md1$condition == "ostensive")], digits = 1)`]) condition. It did not matter if dogs experienced the Non-ostensive condition first (`r apa_num(nochoice_data_conditionorder_md1$mean[which(nochoice_data_conditionorder_md1$condition_order == "nonost_first")], digits = 1)`%, 95% CI [`r apa_num(nochoice_data_conditionorder_md1$lower[which(nochoice_data_conditionorder_md1$condition_order == "nonost_first")], digits = 1)`, `r apa_num(nochoice_data_conditionorder_md1$upper[which(nochoice_data_conditionorder_md1$condition_order == "nonost_first")], digits = 1)`]) or the Ostensive condition first (`r apa_num(nochoice_data_conditionorder_md1$mean[which(nochoice_data_conditionorder_md1$condition_order == "ost_first")], digits = 1)`%, 95% CI [`r apa_num(nochoice_data_conditionorder_md1$lower[which(nochoice_data_conditionorder_md1$condition_order == "ost_first")], digits = 1)`, `r apa_num(nochoice_data_conditionorder_md1$upper[which(nochoice_data_conditionorder_md1$condition_order == "ost_first")], digits = 1)`]). Condition order also did not influence whether dogs were included in the final analysis: `r apa_num(included_condition_order$percent_included[which(included_condition_order$condition_order == "nonost_first")], digits = 1)`% of dogs that received Non-ostensive first were included compared to `r apa_num(included_condition_order$percent_included[which(included_condition_order$condition_order == "ost_first")], digits = 1)`% of dogs that received Ostensive first.
+
+\clearpage
+
+
+# Supplementary materials
+
+\renewcommand{\thetable}{S\arabic{table}}
+\setcounter{table}{0}
+\renewcommand{\thefigure}{S\arabic{figure}}
+\setcounter{figure}{5}
+
+```{r demo-table}
+# Figure S1: Research site information and demographics
+site_info_full <- bind_rows(site_info, cdl_info) |> 
+  mutate(site_name = paste0(site_name, " (", site_abbr, ")"), .keep = "all", .after = 1) |> 
+  arrange(site_abbr)
+protocols <- data.frame(site_name = site_info_full$site_name, protocol = c("#16-175 (IACUC)", "#2020-3725 (IACUC)", "#USCEC 6321 (ERSG)", "#2020-001-01 (IACUC)", "#20-05-0002 (IACUC)", "#124-22 (CICUAL)", "#065\\_2021 (CE)", "#2020-11448 (IACUC)", "#2132 (IACUC); #20491 (IRB)", "#16-175 (IACUC)", "#F21-019 (AC11704) (ACC)", "Exempt", "#081/05/2020 (ETK)", "#22-01-CW (ACC)", "#522D (AWERB)", "#A150-20-07 (IACUC)", "Exempt", "#DR-Dog Percept 11/21 (IACUC)", "#2022-2264 (UACC)", "#DR-Dog Percept 11/21 (IACUC)", "Exempt")) |> 
+  mutate(protocol = gsub("#", "", protocol)) |> 
+  arrange(site_name)
+
+demo_table <- site_info |> 
+  left_join(demographics_included_summary, by = join_by(site_abbr == site)) |> 
+  bind_rows(cdl_info) |> 
+  # left_join(cdl_demos, by = join_by(site_id == site, n, age_mean, age_sd, age_min, age_max, sex_female, sex_male, owned_status_private, owned_status_group)) |> 
+  select(site_name:team, n, purebred_yes, age_mean, age_sd, age_min, age_max, sex_male, sex_female, desexed_yes, contains("owned_"), -site, testing) |> 
+  mutate(site_name = paste0(site_name, " (", site_abbr, ")"), .keep = "unused", .after = 1) |> 
+  mutate(age = paste0(age_mean, "±", age_sd, " (", age_min, "-", age_max, ")"), .keep = "unused", .after = purebred_yes) |> 
+  mutate(sex = paste(sex_male, sex_female, sep = ":"), .after = age, .keep = "unused") |> 
+  mutate(housing = paste0("P = ", owned_status_private, "\nG = ", owned_status_group, "\nO = ", owned_status_other), 
+         housing = gsub("O = 0", "", housing), .keep = "unused", .after = "desexed_yes") |> 
+  arrange(site_name) |> 
+  left_join(protocols, by = "site_name")
+
+demo_table |> 
+  separate(lead, into = c("first", "lead"), sep = " ") |> 
+  select(-first) |> 
+  kable(booktab = TRUE, format = "latex", escape = FALSE, linesep = "\\addlinespace",
+        align = c(rep("l", 3), rep("c", 6), "l", "l"),
+        caption = "Site information and demographics",
+        col.names = c("Site", "Lead", "Location", "Data collection team", "Included dogs", "Purebred", "M$_{age}$±SD (range), yr", "Sex (M:F)", "Desexed", "Housing$^{*}$", "Testing", "Protocol")
+  ) |> 
+  landscape() |> 
+  kable_styling(font_size = 8, latex_options = "scale_down") |> 
+  column_spec(1, width = "6cm") |> 
+  column_spec(2, width = "1.8cm") |> 
+  column_spec(3, width = "3.75cm") |> 
+  column_spec(4, width = "1.35cm") |> 
+  column_spec(5, width = "1.35cm") |> 
+  column_spec(6, width = "1.35cm") |> 
+  column_spec(7, width = "1.5cm") |> 
+  column_spec(8, width = "1.05cm") |> 
+  column_spec(9, width = "1.35cm") |> 
+  column_spec(10, width = "1.05cm") |> 
+  column_spec(11, width = "1.05cm") |>
+  column_spec(12, width = "2.5cm") |>
+  kableExtra::footnote(symbol = c("For housing types, P = Private, G = Group, and O = Other", "Clever Dog Lab participated only in the pilot data collection.", "Leader Dogs for the Blind data collection carried out by TDC with Leader Dog personnel assistance."))
+```
+
+```{r tbl-glmm-pilot-flex}
+# Figure S2: Results of GLMM of the dogs' choice performance (pilot experiment)
+pilot_model_table <- flextable(model_table_pilot) |> 
+  width(j = 1, 1) |> 
+  width(j = 3:9, 0.55) |>
+  fontsize(size = 10) |> 
+  font(part = "all", fontname = "Times New Roman") |> 
+  set_caption("Results of GLMM of the dogs' choice performance (pilot experiment)") |> 
+  footnote(i = 1, j = 9,
+           value = as_paragraph("Bayes factors for hypothesis that the predictor estimate is not 0. Thus, Bayes factors < 0.1 represent strong evidence that predictor estimates = 0."),
+           ref_symbols = "*", part = "header")
+set_table_properties(pilot_model_table, width = 1, layout = "fixed")
+```
+
+\newpage
+```{r site-ttests}
+# Table S3: One-sample t-tests for each condition and site
+site_ttests_df |> 
+  left_join(site_info, by = join_by(site == site_abbr)) |> 
+  arrange(site) |> 
+  select(site, tt_ost:tt_odor) |> 
+  kable(booktab = TRUE, format = "latex", escape = FALSE, longtable = TRUE,
+        linesep = "\\addlinespace",
+        caption = "One-sample t-tests for each condition and site",
+        col.names = c("Site", "Ostensive", "Non-ostensive", "Odor Control")) |> 
+  kable_styling(font_size = 10, latex_options = "scale_down") |> 
+  column_spec(1, width = "1.2cm") |> 
+  column_spec(2:4, width = "4.75cm")
+```
+
+```{r tbl-glmm-breed-flex}
+# Table S4: Results of GLMM of the dogs’ choice performance (main experiment: with breed group as a random effect)
+breed_model_table <- flextable(breedgroups_model_table) |> 
+  width(j = 1, 1) |> 
+  width(j = 3:9, 0.55) |>
+  fontsize(size = 10) |> 
+  font(part = "all", fontname = "Times New Roman") |> 
+  set_caption("Results of GLMM of the dogs' choice performance (main experiment: with breed group as random effect)") |> 
+  footnote(i = 1, j = 9,
+           value = as_paragraph("Bayes factors for hypothesis that the predictor estimate is not 0. Thus, Bayes factors < 0.1 represent strong evidence that predictor estimates = 0."),
+           ref_symbols = "*", part = "header")
+set_table_properties(breed_model_table, width = 1, layout = "fixed")
+```
+
+```{r cond-chance-prelim, fig.cap = "Violin and dot plot of dogs' performance (N = 61) across the (A) Non-ostensive and Ostensive conditions and the (B) Odor Control condition for the preliminary data. The red dashed lines show the chance level of 0.5. Dots represent the mean proportion correct for each individual. The grey lines connect dots representing the same individuals. The error bars represent 95\\% within-subjects confidence intervals; the filled circles on top of the error bars show the means per condition.", fig.align = "center", out.width = "80%"}
+# Figure S6
+knitr::include_graphics(path = here("figures/md1_conditions_pilot.png"))
+```
+
+```{r cond-site-fig, fig.cap = "Condition effects on performance per site. Dot plot of dogs' performance across the Non-ostensive and Ostensive conditions across sites. Dots represent the mean proportion correct for each individual. The grey lines connect dots representing the same individuals. The error bars represent 95\\% within-subjects confidence intervals; the filled circles on top of the error bars show the means per condition.", fig.align = "center", out.width = "100%"}
+# Figure S7
+knitr::include_graphics(path = here("figures/md1_conditions_sites.png"))
+```
+
+```{r reli-plot, echo = FALSE, warning = FALSE, message = FALSE, fig.cap = "Split-half reliability. (A) The dogs' mean performance in odd and even test trials and (B) in the Non-ostensive and Ostensive conditions. The bubbles represent the number of individuals at that performance levels; the red dashed line shows the linear regression line. The black dashed line shows the identity line.", fig.align = "center", out.width = "100%", fig.width = 12, fig.height=5}
+# Figure S8
+split_odd_even_plot + split_conditions_plot + 
+  plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
+ggsave(here("figures/md1_within_reliability.png"), width = 10, height = 5)
+knitr::include_graphics(path = here("figures/md1_within_reliability.png"))
+```
+
+```{r strategy-plot, echo = FALSE, warning = FALSE, message = FALSE, fig.cap = "Strategy responses. The dogs' choice strategies in the Non-ostensive and Ostensive conditions as a function of (A) a win-stay, lose-shift strategy or (B) a win-shift, lose-stay strategy. The bubbles represent the number of individuals at that mean performance level. The red dashed line shows the linear regression line; the black dashed line shows the identity line. (C) and (D): Histogram of dogs' distribution according to the extent to which they performed in line with the (C) win-stay, lose-shift or (D) win-shift, lose-stay strategies. The vertical line shows the chance level of 0.5.", fig.align = "center", out.width = "100%", fig.width = 12, fig.height=10}
+# Figure S9
+knitr::include_graphics(path = here("figures/md1_strategies.png"))
+```
+
+```{r side-bias-fig, fig.cap = "Overall side bias. We calculated bias by taking the absolute value of the difference between each dog's percent located right and percent choice right. No side bias would be 0 and total side bias would be 50 or more.", fig.align = "center", out.width = "100%"}
+# Figure S10
+knitr::include_graphics(path = here("figures/md1_bias.png"))
+```
+
+```{r side-bias-site-fig, fig.cap = "Side bias per site. We calculated bias by taking the absolute value of the difference between each dog's percent located right and percent choice right. No side bias would be 0 and total side bias would be 50. The density function is a smoothed version of a histogram that ensures the total area under the curve is 1, which helps equate for labs with different sample sizes.", fig.align = "center", out.width = "100%"}
+# Figure S11
+knitr::include_graphics(path = here("figures/md1_bias_sites.png"))
+```
+
+\clearpage
+
+# References
