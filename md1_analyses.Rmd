@@ -20,9 +20,6 @@ library(car)
 library(psych)
 library(tidyverse)
 library(here)
-library(papaja)
-library(knitr)
-library(kableExtra)
 library(brms)
 library(BayesFactor)
 library(bayestestR)
@@ -41,12 +38,35 @@ library(glue)
 library(coda)
 library(MCMCglmm)
 library(broom.mixed)
+library(knitr)
+library(kableExtra)
+library(papaja)
+# If you haven't installed tinytex
+# tinytex::install_tinytex()  
 
+# If you haven't installed cmdstanr
+# install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+# cmdstanr::install_cmdstan()
+
+# Needed for Arial font in Linux; comment out if not needed
 extrafont::loadfonts()
 
 # Create citations for R and R packages
 r_refs(file = "r-references.bib")
 my_citations <- cite_r(file = "r-references.bib", pkgs = c("BayesFactor", "bayesplot", "bayestestR", "brms", "broom.mixed", "car", "coda", "data.table", "flextable", "ggdist", "gghalves", "ggpubr", "glue", "gtools", "here", "kableExtra", "knitr", "lme4", "MCMCglmm", "papaja", "patchwork", "performance", "psych", "rmarkdown", "rstan", "tidybayes", "tidyverse"), omit = FALSE)
+
+# Prepare computing environment for parallel processing
+# These analyses take a lot of time and processing to compute 95% CI bootstraps and Bayes factors. Several code chunks use parallel processing, and this section sets up the cores and threads for the parallelization.
+
+# CI bootstraps
+n_cores_ci <- 4 # number of physical CPU cores on your machine you want to use for CI bootstraps
+n_threads_ci <- 4 # number of threads per core you want to use for CI bootstraps
+n_cpu_ci <- n_cores_ci * n_threads_ci # total threads you want to use for CI bootstraps (should be probably no more than 75% of total threads available)
+
+# Bayesian analyses
+n_cores_bf <- 4 # number of physical CPU cores on your machine you want to use for Bayes factors
+n_threads_bf <- 3 # number of threads per core you want to use for Bayes factors
+n_cpu_bf <- n_cores_bf * n_threads_bf # total threads you want to use for Bayes factors (if you have 4 cores and at least 3 threads per core, I would use this---more threads doesn't speed up processing)
 ```
 
 ```{r functions}
@@ -290,7 +310,7 @@ full_model_formula_corr_pilot <- paste(fixed_effects_pilot, random_effects_corr_
 full_model_formula_nocorr_pilot <- paste(fixed_effects_pilot, random_effects_nocorr_pilot)
 ```
 
-```{r run-model-pilot, eval = FALSE}
+```{r run-model-pilot, eval = TRUE}
 # Run the full models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -324,7 +344,7 @@ drop1_full_model_table_pilot <- tibble(effect_drop = drop1_full_model_rownames_p
 write_csv(drop1_full_model_table_pilot, here("results/md1_drop_model_pilot.csv"))
 ```
 
-```{r bootstrap-cis-pilot, eval = FALSE}
+```{r bootstrap-cis-pilot, eval = TRUE}
 # Calculate bootstrapped 95% confidence intervals for model estimates for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -334,7 +354,7 @@ full_model2_pilot <- glmer(full_model_formula_pilot, family = binomial, data = m
                                                   optCtrl = list(maxfun = 10000000), 
                                                   calc.derivs = FALSE), nAGQ = 0)
 full_model_ci_pilot <- boot.glmm.pred(model.res = full_model2_pilot, excl.warnings = TRUE, 
-                                      nboots = 1000, para = TRUE, n.cores = 20, 
+                                      nboots = 1000, para = TRUE, n.cores = n_cpu_ci, 
                                       level = 0.95)
 full_model_ci_estimates_pilot <- full_model_ci_pilot$ci.estimates
 full_model_ci_estimatesl_rownames_pilot <- rownames(full_model_ci_estimates_pilot)
@@ -342,15 +362,12 @@ full_model_ci_estimates_table_pilot <- tibble(effect_ci = full_model_ci_estimate
 write_csv(full_model_ci_estimates_table_pilot, here("results/md1_ci_model_pilot.csv"))
 ```
 
-```{r bayes-factors-pilot, eval = FALSE}
+```{r bayes-factors-pilot, eval = TRUE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
 # Prepare computing environment for Bayesian analysis
-n_cores <- 4
 n_chains <- 4L
-n_threads <- 3
-n_cpu <- n_cores * n_threads
 total_draws <- 40000
 n_warmup <- 5000
 n_iter <- round((total_draws / n_chains) + n_warmup)
@@ -360,54 +377,54 @@ set.seed(101)
 bayes_full_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z || subjectID), family = bernoulli, data = model_data_pilot, 
                         save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                         iter = n_iter, warmup = n_warmup,
-                        chains = n_chains, cores = n_cores, 
-                        threads = threading(n_threads))
+                        chains = n_chains, cores = n_cpu_bf, 
+                        threads = threading(n_threads_bf))
 
 bayes_nocondition_pilot <- brm(correct ~ condition_order + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                                save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                                iter = n_iter, warmup = n_warmup,
-                               chains = n_chains, cores = n_cores, 
-                               threads = threading(n_threads))
+                               chains = n_chains, cores = n_cpu_bf, 
+                               threads = threading(n_threads_bf))
 
 (condition_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_nocondition_pilot, repetitions = 10, silent = TRUE))
 
 bayes_noconditionorder_pilot <- brm(correct ~ condition + trial_num_z + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                                     save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                                     iter = n_iter, warmup = n_warmup,
-                                    chains = n_chains, cores = n_cores, 
-                                    threads = threading(n_threads))
+                                    chains = n_chains, cores = n_cpu_bf, 
+                                    threads = threading(n_threads_bf))
 
 (order_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_noconditionorder_pilot, repetitions = 10, silent = TRUE))
 
 bayes_notrialnum_pilot <- brm(correct ~ condition + condition_order + sex + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                               save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                               iter = n_iter, warmup = n_warmup,
-                              chains = n_chains, cores = n_cores, 
-                              threads = threading(n_threads))
+                              chains = n_chains, cores = n_cpu_bf, 
+                              threads = threading(n_threads_bf))
 
 (trialnum_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_notrialnum_pilot, repetitions = 10, silent = TRUE))
 
 bayes_nosex_pilot <- brm(correct ~ condition + condition_order + trial_num_z + age_z + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                          save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                          iter = n_iter, warmup = n_warmup,
-                         chains = n_chains, cores = n_cores, 
-                         threads = threading(n_threads))
+                         chains = n_chains, cores = n_cpu_bf, 
+                         threads = threading(n_threads_bf))
 
 (sex_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_nosex_pilot, repetitions = 10, silent = TRUE))
 
 bayes_noage_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + training_score_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                          save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                          iter = n_iter, warmup = n_warmup,
-                         chains = n_chains, cores = n_cores, 
-                         threads = threading(n_threads))
+                         chains = n_chains, cores = n_cpu_bf, 
+                         threads = threading(n_threads_bf))
 
 (age_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_noage_pilot, repetitions = 10, silent = TRUE))
 
 bayes_notraining_pilot <- brm(correct ~ condition + condition_order + trial_num_z + sex + age_z + (condition_c + trial_num_z | subjectID), family = bernoulli, data = model_data_pilot, 
                               save_pars = save_pars(all = TRUE), backend = "cmdstanr",
                               iter = n_iter, warmup = n_warmup,
-                              chains = n_chains, cores = n_cores, 
-                              threads = threading(n_threads))
+                              chains = n_chains, cores = n_cpu_bf, 
+                              threads = threading(n_threads_bf))
 
 (training_bf_pilot <- bayes_factor(bayes_full_pilot, bayes_notraining_pilot, repetitions = 10, silent = TRUE))
 
@@ -514,7 +531,7 @@ ggsave(here("figures/md1_conditions_pilot.png"), width = 10, height = 8, scale =
 The dogs choose the baited cup more in the Ostensive condition compared to the Non-ostensive condition (_X_^2^(`r model_table_pilot[model_table_pilot$effect == "Condition", "df"]`) = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "p"])`, _BF_~10~ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "BF"], digits = 1)`) (Figure S6A). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table S2). 
 
 
-```{r check-assumptions-pilot, eval = FALSE}
+```{r check-assumptions-pilot, eval = TRUE}
 # Check assumptions and model stability for pilot data
 
 # Plot visualizations of model checks
@@ -772,7 +789,7 @@ full_model_formula_corr <- paste(fixed_effects, random_effects_corr)
 full_model_formula_nocorr <- paste(fixed_effects, random_effects_nocorr)
 ```
 
-```{r run-model, eval = FALSE}
+```{r run-model, eval = TRUE}
 # Run the full models with and without correlations
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -806,7 +823,7 @@ drop1_full_model_table <- tibble(effect_drop = drop1_full_model_rownames, drop1_
 write_csv(drop1_full_model_table, here("results/md1_drop_model.csv"))
 ```
 
-```{r bootstrap-cis, eval = FALSE}
+```{r bootstrap-cis, eval = TRUE}
 # Calculate bootstrapped 95% confidence intervals for model estimates
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -817,7 +834,7 @@ full_model2 <- glmer(full_model_formula, family = binomial, data = model_data,
                                             calc.derivs = FALSE), nAGQ = 0)
 
 full_model_ci <- boot.glmm.pred(model.res = full_model2, excl.warnings = TRUE, 
-                                nboots = 1000, para = TRUE, n.cores = 20, 
+                                nboots = 1000, para = TRUE, n.cores = n_cpu_ci, 
                                 level = 0.95)
 full_model_ci_estimates<-full_model_ci$ci.estimates
 full_model_ci_estimatesl_rownames <- rownames(full_model_ci_estimates)
@@ -825,15 +842,12 @@ full_model_ci_estimates_table <- tibble(effect_ci = full_model_ci_estimatesl_row
 write_csv(full_model_ci_estimates_table, here("results/md1_ci_model.csv"))
 ```
 
-```{r bayes-factors, eval = FALSE}
+```{r bayes-factors, eval = TRUE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
 # Prepare computing environment for Bayesian analysis
-n_cores <- 4
 n_chains <- 4L
-n_threads <- 3
-n_cpu <- n_cores * n_threads
 total_draws <- 40000
 n_warmup <- 5000
 n_iter <- round((total_draws / n_chains) + n_warmup)
@@ -845,8 +859,8 @@ full_model_bayes <- brm(full_model_formula, data = model_data, family = bernoull
                         prior = prior, sample_prior = "yes", 
                         control = list(adapt_delta = 0.9), backend = "cmdstanr",
                         iter = n_iter, warmup = n_warmup,
-                        chains = n_chains, cores = n_cores, 
-                        threads = threading(n_threads),
+                        chains = n_chains, cores = n_cpu_bf, 
+                        threads = threading(n_threads_bf),
                         seed = 101, silent = 2
 )
 
@@ -996,7 +1010,7 @@ ggsave(here("figures/md1_conditions_sites.png"), width = 8, height = 10, scale =
 
 The dogs did not choose the baited cup differently in the Ostensive and Non-ostensive conditions (_X_^2^(`r model_table[model_table$effect == "Condition", "df"]`) = `r printnum(model_table[model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table[model_table$effect == "Condition", "p"])`) (Figure \@ref(fig:cond-chance)A). This pattern was consistent across almost all sites (Figure S7). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table \@ref(tab:tbl-glmm-flex)). 
 
-```{r check-assumptions, eval = FALSE}
+```{r check-assumptions, eval = TRUE}
 # Check assumptions and model stability
 
 # Plot visualizations of model checks
@@ -1054,7 +1068,7 @@ knitr::include_graphics(path = here("figures/md1_conditions.png"))
 
 #### _Handler Bias_
 
-```{r model-building-bias, eval = FALSE}
+```{r model-building-bias, eval = TRUE}
 # Build and run model for handler bias effect
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1145,7 +1159,7 @@ breed_model_formula <-
   paste0(fixed_effects, breed_random_effects)
 ```
 
-```{r random-slope-breed, eval = FALSE, include = FALSE}
+```{r random-slope-breed, eval = TRUE, include = FALSE}
 ### Define full model for breed group effects
 
 # #### check which random sloped to include. 
@@ -1157,7 +1171,7 @@ xx.fe.re <- fe.re.tab(fe.model = "correct ~ condition + condition_order + trial_
 xx.fe.re$summary
 ```
 
-```{r run-model-breed, eval = FALSE, include = FALSE}
+```{r run-model-breed, eval = TRUE, include = FALSE}
 # Run the full models without correlations for breed group effects
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 breed_model <- glmer(breed_model_formula, data = breed_model_data, 
@@ -1173,7 +1187,7 @@ drop1_breed_model_table <- tibble(effect_drop = drop1_breed_model_rownames, drop
 write_csv(drop1_breed_model_table, here("results/md1_breed_drop_model.csv"))
 ```
 
-```{r bootstrap-cis-breed, eval = FALSE}
+```{r bootstrap-cis-breed, eval = TRUE}
 # Calculate bootstrapped 95% confidence intervals for model estimates for breed groups
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1185,7 +1199,7 @@ breed_model2 <- glmer(breed_model_formula, data = breed_model_data,
                                              calc.derivs = FALSE))
 
 breed_model_ci <- boot.glmm.pred(model.res = breed_model2, excl.warnings = TRUE, 
-                                 nboots = 1000, para = TRUE, n.cores = 20, 
+                                 nboots = 1000, para = TRUE, n.cores = n_cpu_ci, 
                                  level = 0.95)
 breed_model_ci_estimates <- breed_model_ci$ci.estimates
 breed_model_ci_estimatesl_rownames <- rownames(breed_model_ci_estimates)
@@ -1193,7 +1207,7 @@ breed_model_ci_estimates_table <- tibble(effect_ci = breed_model_ci_estimatesl_r
 write_csv(breed_model_ci_estimates_table, here("results/md1_breed_model_cis.csv"))
 ```
 
-```{r bayes-factors-breed, eval = FALSE}
+```{r bayes-factors-breed, eval = TRUE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1203,8 +1217,8 @@ breed_model_bayes <- brm(breed_model_formula, data = model_data,
                          prior = prior, sample_prior = "yes", 
                          control = list(adapt_delta = 0.9),
                          iter = n_iter, warmup = n_warmup,
-                         chains = n_chains, cores = n_cores, backend = "cmdstanr", 
-                         threads = threading(n_threads),
+                         chains = n_chains, cores = n_cpu_bf, backend = "cmdstanr", 
+                         threads = threading(n_threads_bf),
                          seed = 102, silent = 2
 )
 
@@ -1301,7 +1315,7 @@ ggsave(here("figures/md1_breed_group.png"), width = 12, height = 7, scale = 0.5)
 
 We were not able to conduct the pre-registered breed analysis due to too few breeds with at least 8 individuals. Therefore, we conducted a comparable analysis in which we grouped breeds into 10 groups based on the Fédération Cynologique Internationale (FCI) breed categories. We included in our analysis purebred dogs from breed groups with at least 8 individuals in the sample (N = `r pure_bred_n_subject` of `r pure_bred_n_breedgroup` FCI groups: `r breed_groups_included`). For this subset of data, we fitted a binomial GLMM identical to our main model but including breed group as a random intercept (along with with subject and site ID) and all possible random slope components. Condition had no effect on the dogs' choice performance (_X_^2^(`r breedgroups_model_table[breedgroups_model_table$effect == "Condition", "df"]`) = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "p"])`, _BF_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "BF"])`) (Figure \@ref(fig:breed-group)). None of the control predictor variables (order of condition, trial number within condition, sex, neuter status, age, C-BARQ trainability score) had a effect on the dogs' choice performance (Table S4). The only trend was that dogs that started with the Ostensive condition tended to choose the baited cup less often than dogs that started with the Non-ostensive condition.
 
-```{r eval = FALSE, include = FALSE}
+```{r eval = TRUE, include = FALSE}
 # Check assumptions and model stability for breed groups
 
 # Plot visualizations of model checks
@@ -1348,7 +1362,7 @@ eight_plus_breed_n <- nrow(filter(breed_count, n > 7))
 
 Because our final sample included only `r eight_plus_breed_n` breeds with 8 or more individuals, we could not meaningfully implement the pre-registered heritability analyses. Therefore, we conducted exploratory heritability models using a relaxed threshold for breed inclusion. We implemented these models for all pure breed dogs with three more more individuals per breed (`r breed_n` breeds; `r sub_n` individuals) that were also represented in the genetic data. Because we did not differentiate between poodles of different sizes (e.g., standard, miniature, toy) when recording breed information for our participants, we averaged genomic data across poodles of all sizes when calculating our breed average identity-by-state matrix. Additionally, because this resulted in a breed category characterized by substantial variation in body mass, we eliminated body mass as a covariate in the heritability models, retaining only covariates for dog sex and age. 
 
-```{r ibs-matrix, eval = FALSE}
+```{r ibs-matrix, eval = TRUE}
 # Create breed average identity-by-state (IBS) matrix from an individual IBS matrix.
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 ibs_mat <- fread("md1_ibs_matrix.txt", sep = " ", header = FALSE)
@@ -1387,7 +1401,7 @@ table(rownames(ibs_wide_check) == colnames(ibs_wide_check))
 write_csv(ibs_wide, "results/breed_ibs.csv")
 ```
 
-```{r prepare-heritability, eval = FALSE}
+```{r prepare-heritability, eval = TRUE}
 # Prepare data for heritability analysis
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1477,7 +1491,7 @@ write_csv(Z_mat, file = "results/zmatrix.csv")
 write_csv(ind_K, file = "results/kmatrix.csv")
 ```
 
-```{r run-heritability-model, eval = FALSE}
+```{r run-heritability-model, eval = TRUE}
 # Run heritability models
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
