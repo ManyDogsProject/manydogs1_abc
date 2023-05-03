@@ -16,40 +16,50 @@ output:
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 
 # Load packages
-library(car)
-library(psych)
 library(tidyverse)
 library(here)
-library(brms)
+library(lme4)
+library(car)
+library(psych)
 library(BayesFactor)
-library(bayestestR)
-library(performance)
 library(ggdist)
 library(gghalves)
 library(ggpubr)
 library(patchwork)
-library(flextable)
-library(lme4)
-library(gtools)
-library(data.table)
-library(bayesplot)
-library(tidybayes)
-library(glue)
-library(coda)
-library(MCMCglmm)
-library(broom.mixed)
 library(knitr)
 library(kableExtra)
+library(flextable)
 library(papaja)
+
+# Needed for Bayesian analyses
+# library(brms)
+# library(bayestestR)
+# library(performance)
+# library(gtools)
+# library(data.table)
+# library(bayesplot)
+# library(tidybayes)
+# library(glue)
+# library(coda)
+# library(MCMCglmm)
+# library(broom.mixed)
+
+# Install additional packages
+
 # If you haven't installed tinytex
-# tinytex::install_tinytex()  
+# tinytex::install_tinytex()
+
+# Probably best to install rstan directly from Stan
+# Run the next line if you already have rstan installed
+# remove.packages(c("StanHeaders", "rstan"))
+# install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
 
 # If you haven't installed cmdstanr
 # install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
 # cmdstanr::install_cmdstan()
 
-# Needed for Arial font in Linux; comment out if not needed
-extrafont::loadfonts()
+# Needed for Arial font in Linux; uncomment if needed
+extrafont::loadfonts(quiet = TRUE)
 
 # Create citations for R and R packages
 r_refs(file = "r-references.bib")

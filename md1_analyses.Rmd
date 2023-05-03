@@ -16,20 +16,25 @@ output:
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 
 # Load packages
-library(car)
-library(psych)
 library(tidyverse)
 library(here)
-library(brms)
+library(lme4)
+library(car)
+library(psych)
 library(BayesFactor)
-library(bayestestR)
-library(performance)
 library(ggdist)
 library(gghalves)
 library(ggpubr)
 library(patchwork)
+library(knitr)
+library(kableExtra)
 library(flextable)
-library(lme4)
+library(papaja)
+
+# Needed for Bayesian analyses
+library(brms)
+library(bayestestR)
+library(performance)
 library(gtools)
 library(data.table)
 library(bayesplot)
@@ -38,18 +43,23 @@ library(glue)
 library(coda)
 library(MCMCglmm)
 library(broom.mixed)
-library(knitr)
-library(kableExtra)
-library(papaja)
+
+# Install additional packages
+
 # If you haven't installed tinytex
-# tinytex::install_tinytex()  
+# tinytex::install_tinytex()
+
+# Probably best to install rstan directly from Stan
+# Run the next line if you already have rstan installed
+# remove.packages(c("StanHeaders", "rstan"))
+# install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
 
 # If you haven't installed cmdstanr
 # install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
 # cmdstanr::install_cmdstan()
 
-# Needed for Arial font in Linux; comment out if not needed
-extrafont::loadfonts()
+# Needed for Arial font in Linux; uncomment if needed
+# extrafont::loadfonts(quiet = TRUE)
 
 # Create citations for R and R packages
 r_refs(file = "r-references.bib")
@@ -499,7 +509,7 @@ condition_plot_pilot <- agg_data_noodor_pilot |>
   scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
   ylim(0, 1) +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 
 # Odor control
@@ -517,7 +527,7 @@ odor_plot_pilot <- ggplot(data = agg_data_odor_pilot, aes(x = as.numeric(conditi
   scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
   ylim(0, 1) +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 
 # Combine plots
@@ -939,7 +949,7 @@ condition_plot <- agg_data_noodor |>
   scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
   ylim(0, 1) +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 
 # Odor control
@@ -957,7 +967,7 @@ odor_plot <- ggplot(data = agg_data_odor, aes(x = as.numeric(condition), y = mea
   scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
   ylim(0, 1) +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 
 # Combine plots
@@ -1003,7 +1013,7 @@ site_condition_plot <- ggplot(data = agg_data_noodor, aes(x = condition, y = mea
                      limits = c(0.5, 2.5)) +
   scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1.4)) +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_conditions_sites.png"), width = 8, height = 10, scale = 0.75)
 ```
@@ -1304,7 +1314,7 @@ breed_group_data |>
   scale_fill_manual(values = c("#0072B2", "#D55E00")) +
   coord_flip() +
   theme_classic() +
-  theme(text = element_text(family = "Arial"),
+  theme(#text = element_text(family = "Arial"),
         legend.position = c(0.85, 0.86),
         legend.title = element_blank(),
         legend.text = element_text(size = 7),
@@ -1643,7 +1653,7 @@ heritability_plot <- ggplot(post, aes(y = condition, x = heritability)) +
                .width = c(0.9), fill = "#0072B2", alpha = 0.7) +
   labs(x = "Heritability", y = "") +
   theme_classic(base_size = 12) +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_heritability.png"), width = 6, height = 6, scale = 0.75)
 ```
@@ -1681,7 +1691,7 @@ split_odd_even_plot <- ggplot(split_half_data_agg, aes(x = even_trials, y = odd_
   xlim(0,1)+ 
   ylim(0,1) +
   theme_classic()+
-  theme(text = element_text(family = "Arial"),
+  theme(#text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 ```
 
@@ -1709,7 +1719,7 @@ split_conditions_plot <- ggplot(con_half_data_agg, aes(x = nonostensive, y = ost
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic() +
-  theme(text = element_text(family = "Arial"),
+  theme(#text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 ```
 
@@ -1802,7 +1812,7 @@ win_stay_plot <- ggplot(strategy_data_agg, aes(x = mean_win_stay_lose_shift, y =
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic()+
-  theme(text = element_text(family = "Arial"),
+  theme(#text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 
 # Plot win-shift, lose stay correlations
@@ -1815,7 +1825,7 @@ win_shift_plot<-ggplot(strategy_data_agg, aes(x = mean_win_shift_lose_stay, y = 
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic()+
-  theme(text = element_text(family = "Arial"),
+  theme(#text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 
 # Plot histograms of strategy distributions
@@ -1824,14 +1834,14 @@ winshift_hist <- ggplot(strategy_data_agg, aes(x=mean_win_stay_lose_shift)) +
   theme_classic()+
   xlab("Mean win-stay, lose-shift")+
   geom_vline(xintercept=0.5, lty=2) +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 winstay_hist<-ggplot(strategy_data_agg, aes(x=mean_win_shift_lose_stay)) + 
   geom_histogram(color="black", fill="grey50", binwidth = 1/14)+
   theme_classic()+
   xlab("Mean win-shift, lose-stay")+
   geom_vline(xintercept=0.5, lty=2) +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 win_stay_plot + win_shift_plot + winshift_hist + winstay_hist + 
   plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
@@ -1863,14 +1873,14 @@ location_right <- bias_data |>
   xlim(0, 100) +
   labs(x = "Mean percent correct located right", y = "Number of dogs") +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 choice_right <- bias_data |> 
   ggplot(aes(x = rchoice)) +
   geom_histogram(bins = 25) +
   labs(x = "Mean percent choices right", y = "Number of dogs") +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 
 # Plot overall side bias data
@@ -1880,7 +1890,7 @@ bias_plot <- bias_data |>
     labs(x = "Bias in choices from experienced chance", y = "Number of dogs") +
     scale_x_continuous(breaks = seq(0, 50, 10)) +
     theme_classic() +
-    theme(text = element_text(family = "Arial")
+    theme(#text = element_text(family = "Arial")
     )
 ggsave(here("figures/md1_bias.png"), width = 6, height = 6, scale = 0.75)
 
@@ -1893,7 +1903,7 @@ bias_sites <- bias_data |>
   scale_x_continuous(breaks = seq(0, 50, 10)) +
   labs(x = "Bias in choices from experienced chance", y = "Density") +
   theme_classic() +
-  theme(text = element_text(family = "Arial")
+  theme(#text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_bias_sites.png"), width = 8, height = 10, scale = 0.75)
 ```
