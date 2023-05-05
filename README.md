@@ -22,18 +22,6 @@ ManyDogs Project, Espinosa, J., Stevens, J.R., Alberghina, D., Alway, H.E.E., Ba
 In this project, pet dogs voluntarily participated in a two-alternative object choice task with ostensive and non-ostensive experimental conditions, along with warm-up (one cup, two cup) trials and an odor control condition. We collected pilot data from one site and full data from 20 sites. One data file (`md1_data_pilot.csv`) contains records from 61 dogs tested for the pilot experiment between 2020-08-19 and 2020-09-30. The second data file (`md1_data.csv`) contains records from 704 dogs tested for the main experiment between 2022-01-20 and 2023-01-23. For both data sets, each row represents a trial for an individual dog. In addition, there are two files that include genetic data for the heritability analysis. `md1_ibs_matrix.txt` includes the genome-wide identity by state matrix for dogs published in Parker et al., 2017, _Cell Reports_ (<https://doi.org/10.1016/j.celrep.2017.03.079>), and `md1_ibs_matrix_ids.txt` gives the animal identifiers for rows and columns of `md1_ibs_matrix.txt`.
 
 
-## License
-
-All materials presented here are released under the Creative Commons Attribution 4.0 International Public License (CC BY 4.0). You are free to:
-
--   Share — copy and redistribute the material in any medium or format
--   Adapt — remix, transform, and build upon the material for any
-    purpose, even commercially. Under the following terms:
--   Attribution — You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
-
-No additional restrictions — You may not apply legal terms or technological measures that legally restrict others from doing anything the license permits.
-
-
 ## Files
 
 ### Data files
@@ -90,6 +78,20 @@ No additional restrictions — You may not apply legal terms or technological me
 ### Installation
 
 To reproduce these results, first clone or unzip the Git repository into a folder. Then, ensure that subfolders named "figures" and "results" are in the folder. Next, open `md1_analysis.Rmd` in [RStudio](https://rstudio.com) or another R interface and ensure that all packages mentioned at the top of the document are installed, along with [{knitr}](https://yihui.org/knitr/) and [{rmarkdown}](https://rmarkdown.rstudio.com/). Once all packages are installed, use {knitr} to render the R Markdown document (control-shift-K).
+
+Note: The current version of the R Markdown document takes a long time to run (about 12 hours or longer depending on your computer processor). Once it has successfully run once, it saves intermediate results locally. At this point, the code chunks that include the option `eval = TRUE` can be changed to `eval = FALSE` and the packages under '# Needed for Bayesian analyses' do not need to be loaded, so these lines can be commented out. Rendering the document now should take less than a minute.
+
+
+## License
+
+All materials presented here are released under the Creative Commons Attribution 4.0 International Public License (CC BY 4.0). You are free to:
+
+-   Share — copy and redistribute the material in any medium or format
+-   Adapt — remix, transform, and build upon the material for any
+    purpose, even commercially. Under the following terms:
+-   Attribution — You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+
+No additional restrictions — You may not apply legal terms or technological measures that legally restrict others from doing anything the license permits.
 
 
 # Data Set Metadata
