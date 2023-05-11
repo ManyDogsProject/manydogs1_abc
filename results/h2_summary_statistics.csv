@@ -1,0 +1,4 @@
+trait,.lower,.upper,.width,.point,.interval,dv
+0.02,0,0.51,0.9,mode,hdci,ostensive
+0.03,0,0.72,0.9,mode,hdci,nonostensive
+0.03,0,0.74,0.9,mode,hdci,diff_score
