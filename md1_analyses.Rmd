@@ -8,6 +8,8 @@ output:
   bookdown::pdf_document2:
     number_sections: false
     toc: false
+header-includes:
+  - \usepackage{pdflscape}
 ---
 
 ```{r setup-demo, include = FALSE}
@@ -32,17 +34,17 @@ library(flextable)
 library(papaja)
 
 # Needed for Bayesian analyses
-library(brms)
-library(bayestestR)
-library(performance)
-library(gtools)
-library(data.table)
-library(bayesplot)
-library(tidybayes)
-library(glue)
-library(coda)
-library(MCMCglmm)
-library(broom.mixed)
+# library(brms)
+# library(bayestestR)
+# library(performance)
+# library(gtools)
+# library(data.table)
+# library(bayesplot)
+# library(tidybayes)
+# library(glue)
+# library(coda)
+# library(MCMCglmm)
+# library(broom.mixed)
 
 # Install additional packages
 
@@ -59,7 +61,7 @@ library(broom.mixed)
 # cmdstanr::install_cmdstan()
 
 # Needed for Arial font in Linux; uncomment if needed
-# extrafont::loadfonts(quiet = TRUE)
+extrafont::loadfonts(quiet = TRUE)
 
 # Create citations for R and R packages
 r_refs(file = "r-references.bib")
@@ -321,7 +323,7 @@ full_model_formula_corr_pilot <- paste(fixed_effects_pilot, random_effects_corr_
 full_model_formula_nocorr_pilot <- paste(fixed_effects_pilot, random_effects_nocorr_pilot)
 ```
 
-```{r run-model-pilot, eval = TRUE}
+```{r run-model-pilot, eval = FALSE, include = FALSE}
 # Run the full models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -355,7 +357,7 @@ drop1_full_model_table_pilot <- tibble(effect_drop = drop1_full_model_rownames_p
 write_csv(drop1_full_model_table_pilot, here("results/md1_drop_model_pilot.csv"))
 ```
 
-```{r bootstrap-cis-pilot, eval = TRUE}
+```{r bootstrap-cis-pilot, eval = FALSE, include = FALSE}
 # Calculate bootstrapped 95% confidence intervals for model estimates for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -373,7 +375,7 @@ full_model_ci_estimates_table_pilot <- tibble(effect_ci = full_model_ci_estimate
 write_csv(full_model_ci_estimates_table_pilot, here("results/md1_ci_model_pilot.csv"))
 ```
 
-```{r bayes-factors-pilot, eval = TRUE}
+```{r bayes-factors-pilot, eval = FALSE, include = FALSE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -510,7 +512,7 @@ condition_plot_pilot <- agg_data_noodor_pilot |>
   scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
   ylim(0, 1) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 
 # Odor control
@@ -528,7 +530,7 @@ odor_plot_pilot <- ggplot(data = agg_data_odor_pilot, aes(x = as.numeric(conditi
   scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
   ylim(0, 1) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 
 # Combine plots
@@ -542,7 +544,7 @@ ggsave(here("figures/md1_conditions_pilot.png"), width = 10, height = 8, scale =
 The dogs choose the baited cup more in the Ostensive condition compared to the Non-ostensive condition (_X_^2^(`r model_table_pilot[model_table_pilot$effect == "Condition", "df"]`) = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "p"])`, _BF_~10~ = `r printnum(model_table_pilot[model_table_pilot$effect == "Condition", "BF"], digits = 1)`) (Figure S6A). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table S2). 
 
 
-```{r check-assumptions-pilot, eval = TRUE}
+```{r check-assumptions-pilot, eval = FALSE, include = FALSE}
 # Check assumptions and model stability for pilot data
 
 # Plot visualizations of model checks
@@ -800,7 +802,7 @@ full_model_formula_corr <- paste(fixed_effects, random_effects_corr)
 full_model_formula_nocorr <- paste(fixed_effects, random_effects_nocorr)
 ```
 
-```{r run-model, eval = TRUE}
+```{r run-model, eval = FALSE, include = FALSE}
 # Run the full models with and without correlations
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -834,7 +836,7 @@ drop1_full_model_table <- tibble(effect_drop = drop1_full_model_rownames, drop1_
 write_csv(drop1_full_model_table, here("results/md1_drop_model.csv"))
 ```
 
-```{r bootstrap-cis, eval = TRUE}
+```{r bootstrap-cis, eval = FALSE, include = FALSE}
 # Calculate bootstrapped 95% confidence intervals for model estimates
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -853,7 +855,7 @@ full_model_ci_estimates_table <- tibble(effect_ci = full_model_ci_estimatesl_row
 write_csv(full_model_ci_estimates_table, here("results/md1_ci_model.csv"))
 ```
 
-```{r bayes-factors, eval = TRUE}
+```{r bayes-factors, eval = FALSE, include = FALSE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -950,7 +952,7 @@ condition_plot <- agg_data_noodor |>
   scale_x_continuous(breaks = c(1, 2), labels = c("Non-ostensive", "Ostensive")) +
   ylim(0, 1) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 
 # Odor control
@@ -968,7 +970,7 @@ odor_plot <- ggplot(data = agg_data_odor, aes(x = as.numeric(condition), y = mea
   scale_x_continuous(breaks = c(2), labels = c("Odor Control"), limits = c(1.5, 2.3)) +
   ylim(0, 1) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 
 # Combine plots
@@ -1014,14 +1016,14 @@ site_condition_plot <- ggplot(data = agg_data_noodor, aes(x = condition, y = mea
                      limits = c(0.5, 2.5)) +
   scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1.4)) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_conditions_sites.png"), width = 8, height = 10, scale = 0.75)
 ```
 
 The dogs did not choose the baited cup differently in the Ostensive and Non-ostensive conditions (_X_^2^(`r model_table[model_table$effect == "Condition", "df"]`) = `r printnum(model_table[model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(model_table[model_table$effect == "Condition", "p"])`) (Figure \@ref(fig:cond-chance)A). This pattern was consistent across almost all sites (Figure S7). None of the control predictors (order of condition, trial number within condition, sex, age, C-BARQ trainability score) had any effect on dogs' choices (Table \@ref(tab:tbl-glmm-flex)). 
 
-```{r check-assumptions, eval = TRUE}
+```{r check-assumptions, eval = FALSE, include = FALSE}
 # Check assumptions and model stability
 
 # Plot visualizations of model checks
@@ -1079,7 +1081,7 @@ knitr::include_graphics(path = here("figures/md1_conditions.png"))
 
 #### _Handler Bias_
 
-```{r model-building-bias, eval = TRUE}
+```{r model-building-bias, eval = FALSE, include = FALSE}
 # Build and run model for handler bias effect
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1170,7 +1172,7 @@ breed_model_formula <-
   paste0(fixed_effects, breed_random_effects)
 ```
 
-```{r random-slope-breed, eval = TRUE, include = FALSE}
+```{r random-slope-breed, eval = FALSE, include = FALSE}
 ### Define full model for breed group effects
 
 # #### check which random sloped to include. 
@@ -1182,7 +1184,7 @@ xx.fe.re <- fe.re.tab(fe.model = "correct ~ condition + condition_order + trial_
 xx.fe.re$summary
 ```
 
-```{r run-model-breed, eval = TRUE, include = FALSE}
+```{r run-model-breed, eval = FALSE, include = FALSE}
 # Run the full models without correlations for breed group effects
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 breed_model <- glmer(breed_model_formula, data = breed_model_data, 
@@ -1198,7 +1200,7 @@ drop1_breed_model_table <- tibble(effect_drop = drop1_breed_model_rownames, drop
 write_csv(drop1_breed_model_table, here("results/md1_breed_drop_model.csv"))
 ```
 
-```{r bootstrap-cis-breed, eval = TRUE}
+```{r bootstrap-cis-breed, eval = FALSE, include = FALSE}
 # Calculate bootstrapped 95% confidence intervals for model estimates for breed groups
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1218,7 +1220,7 @@ breed_model_ci_estimates_table <- tibble(effect_ci = breed_model_ci_estimatesl_r
 write_csv(breed_model_ci_estimates_table, here("results/md1_breed_model_cis.csv"))
 ```
 
-```{r bayes-factors-breed, eval = TRUE}
+```{r bayes-factors-breed, eval = FALSE, include = FALSE}
 # Run the full Bayesian models with and without correlations for pilot data
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1315,7 +1317,7 @@ breed_group_data |>
   scale_fill_manual(values = c("#0072B2", "#D55E00")) +
   coord_flip() +
   theme_classic() +
-  theme(#text = element_text(family = "Arial"),
+  theme(text = element_text(family = "Arial"),
         legend.position = c(0.85, 0.86),
         legend.title = element_blank(),
         legend.text = element_text(size = 7),
@@ -1326,7 +1328,7 @@ ggsave(here("figures/md1_breed_group.png"), width = 12, height = 7, scale = 0.5)
 
 We were not able to conduct the pre-registered breed analysis due to too few breeds with at least 8 individuals. Therefore, we conducted a comparable analysis in which we grouped breeds into 10 groups based on the Fédération Cynologique Internationale (FCI) breed categories. We included in our analysis purebred dogs from breed groups with at least 8 individuals in the sample (N = `r pure_bred_n_subject` of `r pure_bred_n_breedgroup` FCI groups: `r breed_groups_included`). For this subset of data, we fitted a binomial GLMM identical to our main model but including breed group as a random intercept (along with with subject and site ID) and all possible random slope components. Condition had no effect on the dogs' choice performance (_X_^2^(`r breedgroups_model_table[breedgroups_model_table$effect == "Condition", "df"]`) = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "Chi-square"])`, _p_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "p"])`, _BF_ = `r printnum(breedgroups_model_table[breedgroups_model_table$effect == "Condition", "BF"])`) (Figure \@ref(fig:breed-group)). None of the control predictor variables (order of condition, trial number within condition, sex, neuter status, age, C-BARQ trainability score) had a effect on the dogs' choice performance (Table S4). The only trend was that dogs that started with the Ostensive condition tended to choose the baited cup less often than dogs that started with the Non-ostensive condition.
 
-```{r check-assumptions-breed, eval = TRUE, include = FALSE}
+```{r check-assumptions-breed, eval = FALSE, include = FALSE}
 # Check assumptions and model stability for breed groups
 
 # Plot visualizations of model checks
@@ -1373,7 +1375,7 @@ eight_plus_breed_n <- nrow(filter(breed_count, n > 7))
 
 Because our final sample included only `r eight_plus_breed_n` breeds with 8 or more individuals, we could not meaningfully implement the pre-registered heritability analyses. Therefore, we conducted exploratory heritability models using a relaxed threshold for breed inclusion. We implemented these models for all pure breed dogs with three more more individuals per breed (`r breed_n` breeds; `r sub_n` individuals) that were also represented in the genetic data. Because we did not differentiate between poodles of different sizes (e.g., standard, miniature, toy) when recording breed information for our participants, we averaged genomic data across poodles of all sizes when calculating our breed average identity-by-state matrix. Additionally, because this resulted in a breed category characterized by substantial variation in body mass, we eliminated body mass as a covariate in the heritability models, retaining only covariates for dog sex and age. 
 
-```{r ibs-matrix, eval = TRUE}
+```{r ibs-matrix, eval = FALSE, include = FALSE}
 # Create breed average identity-by-state (IBS) matrix from an individual IBS matrix.
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 ibs_mat <- fread("md1_ibs_matrix.txt", sep = " ", header = FALSE)
@@ -1412,7 +1414,7 @@ table(rownames(ibs_wide_check) == colnames(ibs_wide_check))
 write_csv(ibs_wide, "results/breed_ibs.csv")
 ```
 
-```{r prepare-heritability, eval = TRUE}
+```{r prepare-heritability, eval = FALSE, include = FALSE}
 # Prepare data for heritability analysis
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1502,7 +1504,7 @@ write_csv(Z_mat, file = "results/zmatrix.csv")
 write_csv(ind_K, file = "results/kmatrix.csv")
 ```
 
-```{r run-heritability-model, eval = TRUE}
+```{r run-heritability-model, eval = FALSE, include = FALSE}
 # Run heritability models
 # Output is saved locally to save time, so this code chunk is not evaluated during knitting
 
@@ -1633,7 +1635,7 @@ h2_summaries <- mutate_if(h2_summaries, is.numeric, ~ round(., 2))
 write_csv(h2_summaries, file = "results/h2_summary_statistics.csv")
 ```
 
-```{r plot-heritability, message = FALSE, return = FALSE}
+```{r plot-heritability, message = FALSE, return = FALSE, include = FALSE}
 # Plot posterior distribution of heritability values
 
 # Import posteriors and summary statistics
@@ -1654,7 +1656,7 @@ heritability_plot <- ggplot(post, aes(y = condition, x = heritability)) +
                .width = c(0.9), fill = "#0072B2", alpha = 0.7) +
   labs(x = "Heritability", y = "") +
   theme_classic(base_size = 12) +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_heritability.png"), width = 6, height = 6, scale = 0.75)
 ```
@@ -1692,7 +1694,7 @@ split_odd_even_plot <- ggplot(split_half_data_agg, aes(x = even_trials, y = odd_
   xlim(0,1)+ 
   ylim(0,1) +
   theme_classic()+
-  theme(#text = element_text(family = "Arial"),
+  theme(text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 ```
 
@@ -1720,7 +1722,7 @@ split_conditions_plot <- ggplot(con_half_data_agg, aes(x = nonostensive, y = ost
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic() +
-  theme(#text = element_text(family = "Arial"),
+  theme(text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 ```
 
@@ -1813,7 +1815,7 @@ win_stay_plot <- ggplot(strategy_data_agg, aes(x = mean_win_stay_lose_shift, y =
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic()+
-  theme(#text = element_text(family = "Arial"),
+  theme(text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 
 # Plot win-shift, lose stay correlations
@@ -1826,7 +1828,7 @@ win_shift_plot<-ggplot(strategy_data_agg, aes(x = mean_win_shift_lose_stay, y = 
   xlim(0,1) + 
   ylim(0,1) +
   theme_classic()+
-  theme(#text = element_text(family = "Arial"),
+  theme(text = element_text(family = "Arial"),
         legend.position = c(0.95, 0.2))
 
 # Plot histograms of strategy distributions
@@ -1835,14 +1837,14 @@ winshift_hist <- ggplot(strategy_data_agg, aes(x=mean_win_stay_lose_shift)) +
   theme_classic()+
   xlab("Mean win-stay, lose-shift")+
   geom_vline(xintercept=0.5, lty=2) +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 winstay_hist<-ggplot(strategy_data_agg, aes(x=mean_win_shift_lose_stay)) + 
   geom_histogram(color="black", fill="grey50", binwidth = 1/14)+
   theme_classic()+
   xlab("Mean win-shift, lose-stay")+
   geom_vline(xintercept=0.5, lty=2) +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 win_stay_plot + win_shift_plot + winshift_hist + winstay_hist + 
   plot_annotation(tag_levels = "A", tag_prefix = "(", tag_suffix = ")")
@@ -1874,14 +1876,14 @@ location_right <- bias_data |>
   xlim(0, 100) +
   labs(x = "Mean percent correct located right", y = "Number of dogs") +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 choice_right <- bias_data |> 
   ggplot(aes(x = rchoice)) +
   geom_histogram(bins = 25) +
   labs(x = "Mean percent choices right", y = "Number of dogs") +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 
 # Plot overall side bias data
@@ -1891,7 +1893,7 @@ bias_plot <- bias_data |>
     labs(x = "Bias in choices from experienced chance", y = "Number of dogs") +
     scale_x_continuous(breaks = seq(0, 50, 10)) +
     theme_classic() +
-    theme(#text = element_text(family = "Arial")
+    theme(text = element_text(family = "Arial")
     )
 ggsave(here("figures/md1_bias.png"), width = 6, height = 6, scale = 0.75)
 
@@ -1904,7 +1906,7 @@ bias_sites <- bias_data |>
   scale_x_continuous(breaks = seq(0, 50, 10)) +
   labs(x = "Bias in choices from experienced chance", y = "Density") +
   theme_classic() +
-  theme(#text = element_text(family = "Arial")
+  theme(text = element_text(family = "Arial")
   )
 ggsave(here("figures/md1_bias_sites.png"), width = 8, height = 10, scale = 0.75)
 ```

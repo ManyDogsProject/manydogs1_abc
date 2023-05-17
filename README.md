@@ -7,7 +7,11 @@ This repository provides the reproducible research materials for the [ManyDogs1 
 
 Created on 2023-05-02 by Jeffrey R. Stevens (<jeffrey.r.stevens@gmail.com>)
 
-Finalized on 2023-05-02
+Finalized on 2023-05-17
+
+[GitHub repository](https://github.com/ManyDogsProject/manydogs1_abc)
+
+[Open Science Framework Project](https://osf.io/9r5xf/)
 
 
 ## Citation
@@ -79,7 +83,7 @@ In this project, pet dogs voluntarily participated in a two-alternative object c
 
 To reproduce these results, first clone or unzip the Git repository into a folder. Then, ensure that subfolders named "figures" and "results" are in the folder. Next, open `md1_analysis.Rmd` in [RStudio](https://rstudio.com) or another R interface and ensure that all packages mentioned at the top of the document are installed, along with [{knitr}](https://yihui.org/knitr/) and [{rmarkdown}](https://rmarkdown.rstudio.com/). Once all packages are installed, use {knitr} to render the R Markdown document (control-shift-K).
 
-Note: The current version of the R Markdown document takes a long time to run (about 12 hours or longer depending on your computer processor). Once it has successfully run once, it saves intermediate results locally. At this point, the code chunks that include the option `eval = TRUE` can be changed to `eval = FALSE` and the packages under '# Needed for Bayesian analyses' do not need to be loaded, so these lines can be commented out. Rendering the document now should take less than a minute.
+Note: Compiling the full R Markdown document takes a long time (12 hours or more depending on your computer processor speed and number of cores). The current version of the document runs quickly (less than a minute) using already-calculated results for regression analyses, Bayesian analyses, bootstrapped confidence intervals, and model stability analyses. To run this version, download `md1_analyses_rr.zip` and unzip all files in this repository (including figures and results directories) before knitting the R Markdown document `md1_analyses.Rmd`. To run the full version, replace all instances of `eval = FALSE` in the R Markdown document with `eval = TRUE` before knitting.
 
 
 ## License
