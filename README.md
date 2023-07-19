@@ -53,11 +53,11 @@ In this project, pet dogs voluntarily participated in a two-alternative object c
 * status - Status of subject (Included = included in analysis, Error = excluded due to experimenter error, Incomplete = excluded due to not completing all trials)
 * purebred - Whether dog is purebred (Yes or No)
 * breed - Dog breed of subject
-* breed_group - 
+* breed_group - Breed category defined by Fédération Cynologique Internationale (FCI)
 * age - Dog age in years
 * sex - Dog sex (F = Female, M = Male)
 * desexed - Neuter status (Yes = spayed/neutered, No = intact)
-* owner_status - 
+* owner_status - Dog living situation (Private home, Group housing)
 * training - Mean response to training section of CBARQ questionnaire
 * condition_order - Test condition experience first
 * condition - Condition for trial
@@ -82,8 +82,6 @@ In this project, pet dogs voluntarily participated in a two-alternative object c
 ### Installation
 
 To reproduce these results, first clone or unzip the Git repository into a folder. Then, ensure that subfolders named "figures" and "results" are in the folder. Next, open `md1_analysis.Rmd` in [RStudio](https://rstudio.com) or another R interface and ensure that all packages mentioned at the top of the document are installed, along with [{knitr}](https://yihui.org/knitr/) and [{rmarkdown}](https://rmarkdown.rstudio.com/). Once all packages are installed, use {knitr} to render the R Markdown document (control-shift-K).
-
-Note: Compiling the full R Markdown document takes a long time (12 hours or more depending on your computer processor speed and number of cores). The current version of the document runs quickly (less than a minute) using already-calculated results for regression analyses, Bayesian analyses, bootstrapped confidence intervals, and model stability analyses. To run this version, download `md1_analyses_rr.zip` and unzip all files in this repository (including figures and results directories) before knitting the R Markdown document `md1_analyses.Rmd`. To run the full version, replace all instances of `eval = FALSE` in the R Markdown document with `eval = TRUE` before knitting.
 
 
 ## License
