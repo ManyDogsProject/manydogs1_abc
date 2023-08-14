@@ -76,7 +76,7 @@ In this project, pet dogs voluntarily participated in a two-alternative object c
 
 ### R script
 
-`md1_functions.R` - R script with functions borrowed from [{apastat} package](https://github.com/JeffreyRStevens/apastat) and generously provided by Roger Mundry.
+`md1_functions.R` - R script with functions borrowed from [{formatstats} package](https://github.com/JeffreyRStevens/formatstats) and generously provided by Roger Mundry.
 
 
 ### Installation
